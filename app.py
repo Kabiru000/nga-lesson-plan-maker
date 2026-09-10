@@ -1,9 +1,9 @@
 import streamlit as st
 import json
-import urllib.request
-import ssl
 import io
 import os
+from google import genai
+from google.genai import types
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -62,7 +62,6 @@ def generate_docx_bytes(plans_data: list) -> io.BytesIO:
         r_plan.font.size = Pt(11)
         r_plan.font.name = "Times New Roman"
 
-        # 1-Row, 3-Column Header Table
         meta_table = doc.add_table(rows=1, cols=3)
         meta_table.style = "Table Grid"
         meta_table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -175,72 +174,48 @@ def generate_docx_bytes(plans_data: list) -> io.BytesIO:
     doc_io.seek(0)
     return doc_io
 
-def call_gemini(prompt: str, key: str) -> str:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 4096,
-            "responseMimeType": "application/json"
-        }
-    }
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}
-    )
-    with urllib.request.urlopen(req, context=ctx, timeout=60) as resp:
-        res_data = json.loads(resp.read().decode("utf-8"))
-        parts = res_data["candidates"][0]["content"]["parts"]
-        return "".join([p["text"] for p in parts if "text" in p]).strip()
-
 st.title("📚 Noble Guide Academy Lesson Plan Generator")
 st.markdown("Fast, inspectorate-grade lesson plan generation for Noble Guide Academy.")
 
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
-    api_key = ""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
 
 if not api_key:
-    st.error("API key is not configured in Streamlit Secrets.")
+    st.error("API key is missing in Streamlit Secrets.")
     st.stop()
 
 col1, col2 = st.columns(2)
 with col1:
     staff_name = st.text_input("Teacher's Full Name", value="AMINU KABIRU")
     subject = st.text_input("Subject", value="CHEMISTRY")
-    class_name = st.text_input("Class", value="Year 11")
+    class_name = st.text_input("Class", value="Year 10")
 with col2:
-    week = st.text_input("Week Number", value="6")
-    unit_topic = st.text_input("Unit Topic", value="Chemical and investigations")
+    week = st.text_input("Week Number", value="2")
+    unit_topic = st.text_input("Unit Topic", value="States of Matter")
     textbooks = st.text_input("Reference Textbooks", value="New School Chemistry and Cambridge Chemistry Syllabus IGCSE Course Book")
 
 scheme_detail = st.text_area(
     "Scheme Objectives & Curriculum Codes (One per line)",
     height=140,
-    placeholder="CHE1.1.1 Identify Cations and Anions in a solution.\nCHE1.1.2 Test for aqueous cations using sodium hydroxide."
+    placeholder="CHE1.2.1 Describe and explain diffusion in terms of kinetic particle theory.\nCHE1.2.2 Describe and explain the effect of relative molecular mass on diffusion."
 )
 
 if st.button("Generate Inspection Plans", type="primary"):
     if not scheme_detail.strip():
         st.warning("Please enter at least one curriculum objective.")
     else:
-        with st.spinner("Generating 4 lesson plans (typically takes ~10 seconds)..."):
+        with st.spinner("Generating 4 lesson plans..."):
             prompt = f"""
             Generate exactly 4 structured lesson plans (Lesson 1, 2, 3, and 4) as a valid JSON array for Noble Guide Academy:
             Teacher: {staff_name} | Subject: {subject} | Class: {class_name} | Week: {week} | Unit Topic: {unit_topic} | Books: {textbooks}
             Curriculum Objectives:
             {scheme_detail}
 
-            Rules:
-            1. Output must be a pure JSON array with exactly 4 objects.
-            2. 'resources': Include 1 specific YouTube search recommendation (e.g., FuseSchool, Cognito) and 1 simulation/lab aid (e.g., PhET Interactive Simulations). Each on a new line.
+            Requirements:
+            1. Output MUST be a valid JSON array containing exactly 4 objects.
+            2. 'resources': Include 1 specific YouTube video (e.g. FuseSchool, Cognito) and 1 interactive simulation or lab aid (e.g. PhET). Put each on a new line.
             3. 'objectives': 2-3 concise Bloom's action-verb objectives, each on a new line.
             4. 'direct_teaching': 2-3 direct instruction steps, each on a new line.
             5. 'guided_practice': 2-3 active learning steps, each on a new line.
@@ -249,12 +224,20 @@ if st.button("Generate Inspection Plans", type="primary"):
             8. 'prior_knowledge': format "The students are familiar with...".
             9. 'closure': "Concludes the lesson by giving a neat and tidy summary of the lesson.".
 
-            JSON fields required per item:
+            Required keys in each object:
             "school_name", "staff_name", "subject", "unit_topic", "lesson_topic", "date", "period", "week", "lesson_number", "sex", "duration", "class_name", "no_in_class", "objectives", "resources", "references", "prior_knowledge", "direct_teaching", "guided_practice", "evaluation", "closure", "assignment", "hod_comment"
             """
             try:
-                raw_json = call_gemini(prompt, api_key)
-                data = json.loads(raw_json)
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.2,
+                        response_mime_type="application/json"
+                    )
+                )
+                data = json.loads(response.text)
                 file_data = generate_docx_bytes(data)
 
                 st.success("Lesson plans ready!")
@@ -264,7 +247,5 @@ if st.button("Generate Inspection Plans", type="primary"):
                     file_name=f"NGA_Lesson_Plan_Week_{week}_{unit_topic.replace(' ', '_')}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
-            except urllib.error.URLError as e:
-                st.error(f"Network Timeout: {e}")
             except Exception as e:
                 st.error(f"Generation error: {e}")
