@@ -175,7 +175,7 @@ def generate_docx_bytes(plans_data: list) -> io.BytesIO:
     return doc_io
 
 st.title("📚 Noble Guide Academy Lesson Plan Generator")
-st.markdown("Fast, inspectorate-grade lesson plan generation for Noble Guide Academy.")
+st.markdown("Inspector-compliant lesson planning configured for dynamic contacts and Bloom's Taxonomy domain alignment.")
 
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
@@ -190,42 +190,86 @@ col1, col2 = st.columns(2)
 with col1:
     staff_name = st.text_input("Teacher's Full Name", value="AMINU KABIRU")
     subject = st.text_input("Subject", value="CHEMISTRY")
-    class_name = st.text_input("Class", value="Year 10")
+    class_name = st.text_input("Class", value="Year 11")
+    lesson_count = st.number_input("Number of Contacts/Lessons This Week", min_value=1, max_value=6, value=3, step=1)
 with col2:
-    week = st.text_input("Week Number", value="2")
-    unit_topic = st.text_input("Unit Topic", value="States of Matter")
-    textbooks = st.text_input("Reference Textbooks", value="New School Chemistry and Cambridge Chemistry Syllabus IGCSE Course Book")
+    week = st.text_input("Week Number", value="6")
+    date_schedule = st.text_input("Date(s) for the Week", value="7th & 8th June, 2026")
+    duration = st.text_input("Duration of Lesson", value="50minutes")
+    no_in_class = st.text_input("Number in Class", value="20")
+
+unit_topic = st.text_input("Unit Topic", value="Chemical and investigations")
+textbooks = st.text_input("Reference Textbooks", value="New School Chemistry and Cambridge Chemistry Syllabus IGCSE Course Book")
 
 scheme_detail = st.text_area(
-    "Scheme Objectives & Curriculum Codes (One per line)",
-    height=140,
-    placeholder="CHE1.2.1 Describe and explain diffusion in terms of kinetic particle theory.\nCHE1.2.2 Describe and explain the effect of relative molecular mass on diffusion."
+    "Curriculum Objectives & Codes (One per line)",
+    height=150,
+    placeholder="CHE1.1.1 Identify Cations and Anions in a solution.\nCHE1.1.2 Test for aqueous cations using sodium hydroxide and aqueous ammonia."
 )
 
 if st.button("Generate Inspection Plans", type="primary"):
     if not scheme_detail.strip():
-        st.warning("Please enter at least one curriculum objective.")
+        st.warning("Please supply at least one curriculum objective.")
     else:
-        with st.spinner("Generating 4 lesson plans..."):
+        with st.spinner(f"Generating {lesson_count} lesson plan(s)..."):
             prompt = f"""
-            Generate exactly 4 structured lesson plans (Lesson 1, 2, 3, and 4) as a valid JSON array for Noble Guide Academy:
-            Teacher: {staff_name} | Subject: {subject} | Class: {class_name} | Week: {week} | Unit Topic: {unit_topic} | Books: {textbooks}
-            Curriculum Objectives:
+            You are an expert Inspectorate Curriculum Specialist for Noble Guide Academy.
+            Transform the supplied Curriculum Objectives into exactly {lesson_count} sequential lesson plan(s) (from Lesson 1 up to Lesson {lesson_count}).
+
+            METADATA CONSTRAINTS:
+            - Staff Name: {staff_name}
+            - Subject: {subject}
+            - Class: {class_name}
+            - Week: {week}
+            - Date: {date_schedule}
+            - Duration: {duration}
+            - No. in Class: {no_in_class}
+            - Unit Topic: {unit_topic}
+            - Reference Books: {textbooks}
+
+            SUPPLIED CURRICULUM OBJECTIVES:
             {scheme_detail}
 
-            Requirements:
-            1. Output MUST be a valid JSON array containing exactly 4 objects.
-            2. 'resources': Include 1 specific YouTube video (e.g. FuseSchool, Cognito) and 1 interactive simulation or lab aid (e.g. PhET). Put each on a new line.
-            3. 'objectives': 2-3 concise Bloom's action-verb objectives, each on a new line.
-            4. 'direct_teaching': 2-3 direct instruction steps, each on a new line.
-            5. 'guided_practice': 2-3 active learning steps, each on a new line.
-            6. 'evaluation': 1-2 assessment questions, each on a new line.
-            7. 'assignment': 1-2 homework questions, each on a new line.
-            8. 'prior_knowledge': format "The students are familiar with...".
-            9. 'closure': "Concludes the lesson by giving a neat and tidy summary of the lesson.".
+            CRITICAL PEDAGOGICAL RULES:
+            1. STRICT CURRICULUM FIDELITY: Do NOT invent entirely new topics or concepts outside what the teacher supplied above.
+            2. BLOOM'S TAXONOMY DERIVATION: Break down the teacher's supplied curriculum statements across appropriate learning domains (Cognitive: identify, explain, calculate, evaluate; Psychomotor: assemble, titrate, record, observe; Affective: collaborate, demonstrate care with reagents).
+            3. Each individual lesson objective must retain its original curriculum code (e.g., [CHE1.1.1]) and use a measurable Bloom's active verb.
+            4. Put EACH objective, teaching step, evaluation question, and assignment item on its own individual line.
+            5. 'resources' MUST include:
+               - Specific YouTube search video recommendation (e.g. FuseSchool, Cognito, Pearson, FreeScienceLessons). Format: "Video: [Title] - [Channel] (YouTube)"
+               - Practical apparatus or interactive simulation (e.g. "Simulation: PhET Interactive Simulations - [Topic]").
+            6. 'prior_knowledge' must start with: "The students are familiar with...".
+            7. 'closure' must be: "Concludes the lesson by giving a neat and tidy summary of the lesson.".
+            8. Return ONLY a valid JSON array of {lesson_count} objects. No conversational preamble.
 
-            Required keys in each object:
-            "school_name", "staff_name", "subject", "unit_topic", "lesson_topic", "date", "period", "week", "lesson_number", "sex", "duration", "class_name", "no_in_class", "objectives", "resources", "references", "prior_knowledge", "direct_teaching", "guided_practice", "evaluation", "closure", "assignment", "hod_comment"
+            JSON Schema:
+            [
+              {{
+                "school_name": "Noble Guide Academy, Abuja",
+                "staff_name": "{staff_name}",
+                "subject": "{subject}",
+                "unit_topic": "{unit_topic}",
+                "lesson_topic": "Derived specific topic for this lesson",
+                "date": "{date_schedule}",
+                "period": "Period specified or e.g. 1st & 2nd",
+                "week": "{week}",
+                "lesson_number": "1",
+                "sex": "Mixed",
+                "duration": "{duration}",
+                "class_name": "{class_name}",
+                "no_in_class": "{no_in_class}",
+                "objectives": "string",
+                "resources": "string",
+                "references": "{textbooks}",
+                "prior_knowledge": "string",
+                "direct_teaching": "string",
+                "guided_practice": "string",
+                "evaluation": "string",
+                "closure": "Concludes the lesson by giving a neat and tidy summary of the lesson.",
+                "assignment": "string",
+                "hod_comment": ""
+              }}
+            ]
             """
             try:
                 client = genai.Client(api_key=api_key)
@@ -240,7 +284,7 @@ if st.button("Generate Inspection Plans", type="primary"):
                 data = json.loads(response.text)
                 file_data = generate_docx_bytes(data)
 
-                st.success("Lesson plans ready!")
+                st.success(f"{len(data)} lesson plan(s) generated successfully!")
                 st.download_button(
                     label="📥 Download Word Document (.docx)",
                     data=file_data,
