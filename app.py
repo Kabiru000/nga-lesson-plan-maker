@@ -176,10 +176,14 @@ def generate_docx_bytes(plans_data: list) -> io.BytesIO:
     return doc_io
 
 def call_gemini(prompt: str, key: str) -> str:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2}
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 4096,
+            "responseMimeType": "application/json"
+        }
     }
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -188,25 +192,24 @@ def call_gemini(prompt: str, key: str) -> str:
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "x-goog-api-key": key}
+        headers={"Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, context=ctx) as resp:
+    with urllib.request.urlopen(req, context=ctx, timeout=60) as resp:
         res_data = json.loads(resp.read().decode("utf-8"))
         parts = res_data["candidates"][0]["content"]["parts"]
-        text_output = "".join([p["text"] for p in parts if "text" in p])
-        if "```json" in text_output:
-            text_output = text_output.split("```json")[1].split("```")[0].strip()
-        elif "```" in text_output:
-            text_output = text_output.split("```")[1].split("```")[0].strip()
-        return text_output
+        return "".join([p["text"] for p in parts if "text" in p]).strip()
 
 st.title("📚 Noble Guide Academy Lesson Plan Generator")
-st.markdown("Automated inspectorate layout with verified two-table hierarchy and school branding.")
+st.markdown("Fast, inspectorate-grade lesson plan generation for Noble Guide Academy.")
 
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
     api_key = ""
+
+if not api_key:
+    st.error("API key is not configured in Streamlit Secrets.")
+    st.stop()
 
 col1, col2 = st.columns(2)
 with col1:
@@ -220,84 +223,48 @@ with col2:
 
 scheme_detail = st.text_area(
     "Scheme Objectives & Curriculum Codes (One per line)",
-    height=160,
-    placeholder="CHE1.1.1 Identify Cations and Anions in a solution.\nCHE1.1.2 Test for aqueous cations using sodium hydroxide and aqueous ammonia."
+    height=140,
+    placeholder="CHE1.1.1 Identify Cations and Anions in a solution.\nCHE1.1.2 Test for aqueous cations using sodium hydroxide."
 )
 
 if st.button("Generate Inspection Plans", type="primary"):
     if not scheme_detail.strip():
         st.warning("Please enter at least one curriculum objective.")
     else:
-        with st.spinner("Generating inspectorate-compliant lesson plans with video and simulation links..."):
+        with st.spinner("Generating 4 lesson plans (typically takes ~10 seconds)..."):
             prompt = f"""
-            You are an expert Nigerian Inspectorate & Cambridge Curriculum Lesson Plan generator for Noble Guide Academy.
-            Convert the following Scheme of Work entry into exactly 4 sequential lesson plans (Lesson 1, 2, 3, and 4) for one week:
-
-            - Staff Name: {staff_name}
-            - Subject: {subject}
-            - Class: {class_name}
-            - Week: {week}
-            - Unit Topic: {unit_topic}
-            - Reference Books: {textbooks}
-            - Scheme Objectives:
+            Generate exactly 4 structured lesson plans (Lesson 1, 2, 3, and 4) as a valid JSON array for Noble Guide Academy:
+            Teacher: {staff_name} | Subject: {subject} | Class: {class_name} | Week: {week} | Unit Topic: {unit_topic} | Books: {textbooks}
+            Curriculum Objectives:
             {scheme_detail}
 
-            MANDATORY CONTENT REQUIREMENTS:
-            1. Output ONLY a valid JSON array of 4 lesson objects. No conversational preamble or postscript.
-            2. 'resources' MUST contain:
-               - At least 1 specific Video demonstration from FuseSchool, Cognito, Pearson, or FreeScienceLessons with the search title.
-                 Format: "Video: [Exact Title/Topic] - [Channel Name] (YouTube)"
-               - At least 1 interactive simulation or practical tool (e.g. "Simulation: PhET Interactive Simulations - [Simulation Name]" or "Lab Apparatus: [List key reagents/glassware]").
-               - Each resource item must be on its own line.
-            3. In 'objectives': 2-4 Bloom's action-verb objectives, EACH on a separate line.
-            4. In 'direct_teaching': Teacher presentation steps, EACH on a new line (e.g. Introduction of topic, Class discussion, Demonstration).
-            5. In 'guided_practice': Student active learning steps, EACH on a new line.
-            6. In 'evaluation': Targeted inspection questions testing objectives, EACH on a new line.
-            7. In 'assignment': 1-3 homework questions, EACH on a new line.
-            8. 'prior_knowledge' format: "The students are familiar with...".
-            9. 'closure' format: "Concludes the lesson by giving a neat and tidy summary of the lesson.".
-            10. 'hod_comment' must be "".
+            Rules:
+            1. Output must be a pure JSON array with exactly 4 objects.
+            2. 'resources': Include 1 specific YouTube search recommendation (e.g., FuseSchool, Cognito) and 1 simulation/lab aid (e.g., PhET Interactive Simulations). Each on a new line.
+            3. 'objectives': 2-3 concise Bloom's action-verb objectives, each on a new line.
+            4. 'direct_teaching': 2-3 direct instruction steps, each on a new line.
+            5. 'guided_practice': 2-3 active learning steps, each on a new line.
+            6. 'evaluation': 1-2 assessment questions, each on a new line.
+            7. 'assignment': 1-2 homework questions, each on a new line.
+            8. 'prior_knowledge': format "The students are familiar with...".
+            9. 'closure': "Concludes the lesson by giving a neat and tidy summary of the lesson.".
 
-            JSON schema:
-            [
-              {{
-                "school_name": "Noble Guide Academy, Abuja",
-                "staff_name": "{staff_name}",
-                "subject": "{subject}",
-                "unit_topic": "{unit_topic}",
-                "lesson_topic": "string",
-                "date": "string",
-                "period": "string",
-                "week": "{week}",
-                "lesson_number": "1",
-                "sex": "Mixed",
-                "duration": "50minutes",
-                "class_name": "{class_name}",
-                "no_in_class": "20",
-                "objectives": "string",
-                "resources": "string",
-                "references": "{textbooks}",
-                "prior_knowledge": "string",
-                "direct_teaching": "string",
-                "guided_practice": "string",
-                "evaluation": "string",
-                "closure": "Concludes the lesson by giving a neat and tidy summary of the lesson.",
-                "assignment": "string",
-                "hod_comment": ""
-              }}
-            ]
+            JSON fields required per item:
+            "school_name", "staff_name", "subject", "unit_topic", "lesson_topic", "date", "period", "week", "lesson_number", "sex", "duration", "class_name", "no_in_class", "objectives", "resources", "references", "prior_knowledge", "direct_teaching", "guided_practice", "evaluation", "closure", "assignment", "hod_comment"
             """
             try:
                 raw_json = call_gemini(prompt, api_key)
                 data = json.loads(raw_json)
                 file_data = generate_docx_bytes(data)
 
-                st.success("Inspection lesson plans ready!")
+                st.success("Lesson plans ready!")
                 st.download_button(
                     label="📥 Download Word Document (.docx)",
                     data=file_data,
                     file_name=f"NGA_Lesson_Plan_Week_{week}_{unit_topic.replace(' ', '_')}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
+            except urllib.error.URLError as e:
+                st.error(f"Network Timeout: {e}")
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Generation error: {e}")
