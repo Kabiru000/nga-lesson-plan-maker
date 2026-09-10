@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import io
 import os
+import time
 from google import genai
 from google.genai import types
 from docx import Document
@@ -174,6 +175,32 @@ def generate_docx_bytes(plans_data: list) -> io.BytesIO:
     doc_io.seek(0)
     return doc_io
 
+def execute_generation_with_fallback(client, prompt: str):
+    candidate_models = ["gemini-3.6-flash", "gemini-2.0-flash"]
+    last_error = None
+
+    for model_name in candidate_models:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.2,
+                        response_mime_type="application/json"
+                    )
+                )
+                return json.loads(response.text)
+            except Exception as err:
+                err_str = str(err)
+                last_error = err
+                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                break
+
+    raise last_error
+
 st.title("📚 Noble Guide Academy Lesson Plan Generator")
 st.markdown("Inspector-compliant lesson planning configured for dynamic contacts and Bloom's Taxonomy domain alignment.")
 
@@ -273,15 +300,7 @@ if st.button("Generate Inspection Plans", type="primary"):
             """
             try:
                 client = genai.Client(api_key=api_key)
-                response = client.models.generate_content(
-                    model="gemini-3.6-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.2,
-                        response_mime_type="application/json"
-                    )
-                )
-                data = json.loads(response.text)
+                data = execute_generation_with_fallback(client, prompt)
                 file_data = generate_docx_bytes(data)
 
                 st.success(f"{len(data)} lesson plan(s) generated successfully!")
