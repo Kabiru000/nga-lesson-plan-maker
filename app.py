@@ -176,29 +176,25 @@ def generate_docx_bytes(plans_data: list) -> io.BytesIO:
     return doc_io
 
 def execute_generation_with_fallback(client, prompt: str):
-    candidate_models = ["gemini-3.6-flash", "gemini-2.0-flash"]
     last_error = None
-
-    for model_name in candidate_models:
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.2,
-                        response_mime_type="application/json"
-                    )
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    response_mime_type="application/json"
                 )
-                return json.loads(response.text)
-            except Exception as err:
-                err_str = str(err)
-                last_error = err
-                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
-                    time.sleep(2 * (attempt + 1))
-                    continue
-                break
-
+            )
+            return json.loads(response.text)
+        except Exception as err:
+            err_str = str(err)
+            last_error = err
+            if any(k in err_str for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED"]):
+                time.sleep(3 * (attempt + 1))
+                continue
+            raise err
     raise last_error
 
 st.title("📚 Noble Guide Academy Lesson Plan Generator")
