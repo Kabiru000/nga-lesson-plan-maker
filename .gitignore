@@ -1,0 +1,4 @@
+__pycache__/
+*.docx
+.DS_Store
+.streamlit/
