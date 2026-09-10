@@ -175,7 +175,7 @@ def generate_docx_bytes(plans_data: list) -> io.BytesIO:
     doc_io.seek(0)
     return doc_io
 
-def execute_generation_with_fallback(client, prompt: str):
+def execute_generation_with_retry(client, prompt: str):
     last_error = None
     for attempt in range(3):
         try:
@@ -191,22 +191,49 @@ def execute_generation_with_fallback(client, prompt: str):
         except Exception as err:
             err_str = str(err)
             last_error = err
-            if any(k in err_str for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED"]):
-                time.sleep(3 * (attempt + 1))
+            if any(k in err_str for k in ["503", "UNAVAILABLE"]):
+                time.sleep(2 * (attempt + 1))
                 continue
             raise err
     raise last_error
 
-st.title("📚 Noble Guide Academy Lesson Plan Generator")
-st.markdown("Inspector-compliant lesson planning configured for dynamic contacts and Bloom's Taxonomy domain alignment.")
+# --- API KEY MEMORY MANAGEMENT ---
+query_params = st.query_params
+saved_key = query_params.get("k", "")
 
-try:
-    api_key = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    api_key = os.environ.get("GEMINI_API_KEY", "")
+with st.sidebar:
+    st.header("🔑 Your Gemini Key")
+    st.markdown("Each teacher uses their own **free key** (20 plans/day). It costs $0.")
+    user_key = st.text_input(
+        "Enter your API Key:",
+        value=saved_key,
+        type="password",
+        help="Get a free key in 30 seconds at aistudio.google.com"
+    )
+
+    if st.button("💾 Save Key to this Device"):
+        if user_key.strip():
+            st.query_params["k"] = user_key.strip()
+            st.success("Key remembered! Bookmark this page so you never have to enter it again.")
+        else:
+            st.query_params.clear()
+            st.info("Key cleared.")
+
+    st.markdown("---")
+    st.markdown(
+        "**Need a free key?**\n"
+        "1. Go to [aistudio.google.com](https://aistudio.google.com)\n"
+        "2. Click **Get API key**\n"
+        "3. Copy and paste it here"
+    )
+
+api_key = user_key.strip()
+
+st.title("📚 Noble Guide Academy Lesson Plan Generator")
+st.markdown("Inspectorate-compliant lesson planning configured for dynamic contacts and Bloom's Taxonomy domain alignment.")
 
 if not api_key:
-    st.error("API key is missing in Streamlit Secrets.")
+    st.warning("👈 Please enter your free Gemini API key in the left sidebar to start generating plans.")
     st.stop()
 
 col1, col2 = st.columns(2)
@@ -296,7 +323,7 @@ if st.button("Generate Inspection Plans", type="primary"):
             """
             try:
                 client = genai.Client(api_key=api_key)
-                data = execute_generation_with_fallback(client, prompt)
+                data = execute_generation_with_retry(client, prompt)
                 file_data = generate_docx_bytes(data)
 
                 st.success(f"{len(data)} lesson plan(s) generated successfully!")
