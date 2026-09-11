@@ -124,17 +124,18 @@ def generate_docx_bytes(plans_data: list, term_label: str) -> io.BytesIO:
         p_spacer.paragraph_format.space_before = Pt(3)
         p_spacer.paragraph_format.space_after = Pt(3)
 
+        # Uniform bulleting: all itemized sections use consistent '-' bullets
         sections = [
             ("Lesson Objectives: By the end of the lesson students, should be able to:", plan.get('objectives', ''), "decimal"),
-            ("Instructional/Teaching Resources:", plan.get('resources', ''), "hyphen"),
+            ("Instructional/Teaching Resources:", plan.get('resources', ''), "bullet"),
             ("Reference(s):", plan.get('references', ''), "none"),
             ("Prior Knowledge and Connection:", plan.get('prior_knowledge', ''), "none"),
-            ("Direct Teaching:", plan.get('direct_teaching', ''), "diamond"),
-            ("Guided Practice (Students’ Active Learning):", plan.get('guided_practice', ''), "diamond"),
-            ("Lesson Summary Notes:", plan.get('summary_notes', ''), "hyphen"),
-            ("Evaluation:", plan.get('evaluation', ''), "hyphen"),
+            ("Direct Teaching:", plan.get('direct_teaching', ''), "bullet"),
+            ("Guided Practice (Students’ Active Learning):", plan.get('guided_practice', ''), "bullet"),
+            ("Evaluation:", plan.get('evaluation', ''), "bullet"),
             ("Closure (Plenary):", plan.get('closure', 'Concludes the lesson by giving a neat and tidy summary of the lesson.'), "none"),
-            ("Assignment:", plan.get('assignment', ''), "hyphen"),
+            ("Lesson Summary Notes:", plan.get('summary_notes', ''), "bullet"),
+            ("Assignment:", plan.get('assignment', ''), "bullet"),
             ("HoD’s Comment And Signature:", "", "none")
         ]
 
@@ -168,19 +169,14 @@ def generate_docx_bytes(plans_data: list, term_label: str) -> io.BytesIO:
                     p_item.paragraph_format.space_after = Pt(1)
                     p_item.paragraph_format.line_spacing = 1.15
 
-                    clean_text = line.lstrip("0123456789.-◆* ")
+                    clean_text = line.lstrip("0123456789.-◆*• ")
 
                     if bullet_type == "decimal":
                         p_item.paragraph_format.left_indent = Inches(0.2)
                         r_item = p_item.add_run(f"{l_idx + 1}. {clean_text}")
                         r_item.font.name = "Calibri"
                         r_item.font.size = Pt(10)
-                    elif bullet_type == "diamond":
-                        p_item.paragraph_format.left_indent = Inches(0.2)
-                        r_item = p_item.add_run(f"◆ {clean_text}")
-                        r_item.font.name = "Calibri"
-                        r_item.font.size = Pt(10)
-                    elif bullet_type == "hyphen":
+                    elif bullet_type == "bullet":
                         p_item.paragraph_format.left_indent = Inches(0.2)
                         r_item = p_item.add_run(f"- {clean_text}")
                         r_item.font.name = "Calibri"
@@ -286,7 +282,7 @@ with c3:
 with c4:
     textbooks = st.text_input("Reference Textbooks", value="New School Chemistry and Cambridge Chemistry Syllabus IGCSE Course Book")
 
-# Dynamic Lesson Topic Configuration (One distinct input per contact)
+# Dynamic Lesson Topic Configuration
 st.subheader(f"📖 Specific Lesson Topics for {lesson_count} Contact(s)")
 st.caption("Enter the exact topic for each lesson. If left blank, the AI will derive it from your curriculum/scheme.")
 
@@ -327,13 +323,12 @@ if st.button("Generate Inspection Plans", type="primary"):
         with st.spinner(f"Parsing curriculum data for {term_selected} - {week_selected} and generating {lesson_count} lesson plan(s)..."):
             combined_docs = scheme_detail.strip()
             if extracted_curriculum:
-                combined_docs += f"\n\n--- CURRICULUM FRAMEWORK EXTRACT ---\n{extracted_curriculum[:6000]}"
+                combined_docs += f"\n\n--- CURRICULUM FRAMEWORK EXTRACT ---\n{extracted_curriculum[:8000]}"
             if extracted_scheme:
-                combined_docs += f"\n\n--- ANNUAL SCHEME OF WORK (LOCATE {term_selected.upper()} AND {week_selected.upper()}) ---\n{extracted_scheme[:10000]}"
+                combined_docs += f"\n\n--- ANNUAL SCHEME OF WORK (LOCATE {term_selected.upper()} AND {week_selected.upper()}) ---\n{extracted_scheme[:12000]}"
             if extracted_notes:
                 combined_docs += f"\n\n--- REFERENCE NOTES / TEXTBOOK EXTRACT ---\n{extracted_notes[:5000]}"
 
-            # Format the specific user-provided contact topics
             topic_instructions = []
             for k, v in contact_topics.items():
                 if v.strip():
@@ -344,7 +339,7 @@ if st.button("Generate Inspection Plans", type="primary"):
 
             prompt = f"""
             You are an expert Inspectorate Curriculum Specialist for Noble Guide Academy, Abuja.
-            The school operates an annual session structured as 3 terms, each having 8 teaching weeks, with subjects having between 1 to 5 contacts/lessons per week.
+            Generate exactly {lesson_count} sequential lesson plans (Lesson 1 to Lesson {lesson_count}) as a valid JSON array.
 
             TARGET TIME FRAME:
             - Term: {term_selected}
@@ -368,22 +363,25 @@ if st.button("Generate Inspection Plans", type="primary"):
             CURRICULUM SPECIFICATIONS, SCHEME OF WORK & REFERENCE MATERIAL:
             {combined_docs}
 
-            PEDAGOGICAL REQUIREMENTS:
-            1. LESSON TOPIC FIDELITY: For each lesson, set the "lesson_topic" field to the corresponding topic specified above. If the teacher did not supply an exact topic, derive a precise, granular sub-topic for that period.
-            2. TARGETED EXTRACTION: Specifically isolate and teach the curriculum codes and concepts assigned to {term_selected} and {week_selected}.
-            3. BLOOM'S TAXONOMY DERIVATION: Break down syllabus statements into measurable objectives starting with active Bloom's verbs across Cognitive, Psychomotor, and Affective domains. Each objective must display its syllabus code (e.g., [CHE1.1.1]).
-            4. GUIDED PRACTICE: EVERY individual active learning step MUST begin with its corresponding framework code, e.g., "[CHE1.1.1] Students examine unknown salt solutions in test tubes...".
-            5. LESSON SUMMARY NOTES: Generate 3-4 bullet points summarizing the core teaching content for this lesson (derived from the scheme/notes/framework).
-            6. HOD SECTION: The "hod_comment" field must be empty ("").
-            7. RESOURCES:
-               - Specific YouTube search video recommendation: "Video: [Title] - [Channel] (YouTube)"
-               - Simulation/lab apparatus: "Simulation: PhET Interactive Simulations - [Topic]" or lab reagents.
-            8. PRIOR KNOWLEDGE: format "The students are familiar with...".
-            9. CLOSURE: "Concludes the lesson by giving a neat and tidy summary of the lesson.".
-            10. Output must be strictly a JSON array with exactly {lesson_count} objects (Lesson 1 to Lesson {lesson_count}).
+            CRITICAL PEDAGOGICAL & FORMATTING REQUIREMENTS:
+            1. STRICT CURRICULUM FRAMEWORK FIDELITY:
+               - 'direct_teaching': Must be derived strictly and exclusively from the uploaded Curriculum Framework and Scheme of Work. Do not invent steps.
+               - 'prior_knowledge': Must be derived strictly from preceding stages in the curriculum framework, formatted as "The students are familiar with...".
+            2. LESSON OBJECTIVES: Break down the scheme statements into active Bloom's Taxonomy verbs (Cognitive, Psychomotor, Affective), each retaining its exact curriculum framework code (e.g. [CHE1.1.1]).
+            3. GUIDED PRACTICE: EVERY single activity step MUST explicitly begin with its matching curriculum framework code, e.g., "[CHE1.1.1] Students test unknown solutions using aqueous sodium hydroxide...".
+            4. INSTRUCTIONAL RESOURCES & WORKING URL LINKS:
+               - The 'resources' field MUST include actual clickable text URLs:
+                 * A direct YouTube search URL: "YouTube Video: [Video Title/Topic] - https://www.youtube.com/results?search_query=[encoded+search+terms]"
+                 * An interactive PhET simulation URL: "PhET Simulation: [Simulation Title] - https://phet.colorado.edu/en/simulations/filter?subjects=[topic]&type=html" (or exact match URL).
+                 * Key concrete apparatus/reagents needed.
+               - Each resource on its own line.
+            5. LESSON SUMMARY NOTES: Provide 3-4 bullet points summarizing key concepts taught in this lesson (derived from the notes/framework). This will appear directly below Closure.
+            6. CLOSURE (PLENARY): Must be exactly: "Concludes the lesson by giving a neat and tidy summary of the lesson.".
+            7. HOD SECTION: The "hod_comment" field must be empty ("").
+            8. JSON FORMAT: Return strictly a JSON array containing exactly {lesson_count} objects.
 
             JSON Schema keys per item:
-            "school_name", "staff_name", "subject", "unit_topic", "lesson_topic", "date", "period", "week", "lesson_number", "sex", "duration", "class_name", "no_in_class", "objectives", "resources", "references", "prior_knowledge", "direct_teaching", "guided_practice", "summary_notes", "evaluation", "closure", "assignment", "hod_comment"
+            "school_name", "staff_name", "subject", "unit_topic", "lesson_topic", "date", "period", "week", "lesson_number", "sex", "duration", "class_name", "no_in_class", "objectives", "resources", "references", "prior_knowledge", "direct_teaching", "guided_practice", "evaluation", "closure", "summary_notes", "assignment", "hod_comment"
             """
             try:
                 client = genai.Client(api_key=api_key)
