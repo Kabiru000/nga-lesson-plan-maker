@@ -286,13 +286,19 @@ with c3:
 with c4:
     textbooks = st.text_input("Reference Textbooks", value="New School Chemistry and Cambridge Chemistry Syllabus IGCSE Course Book")
 
-# Dynamic Lesson Topic Configuration
-st.subheader("📖 Specific Topics for the Week's Contacts")
-custom_topics = st.text_area(
-    f"Topics for the {lesson_count} lessons (optional, one per line):",
-    height=80,
-    placeholder="Lesson 1: Identification of Cations using Aqueous NaOH\nLesson 2: Confirmatory Tests for Aqueous Anions\nLesson 3: Titration and Volumetric Calculations"
-)
+# Dynamic Lesson Topic Configuration (One distinct input per contact)
+st.subheader(f"📖 Specific Lesson Topics for {lesson_count} Contact(s)")
+st.caption("Enter the exact topic for each lesson. If left blank, the AI will derive it from your curriculum/scheme.")
+
+contact_topics = {}
+topic_cols = st.columns(int(lesson_count))
+for i in range(int(lesson_count)):
+    with topic_cols[i]:
+        contact_topics[f"Lesson {i+1}"] = st.text_input(
+            f"Lesson {i+1} Topic:",
+            placeholder=f"e.g., Sub-topic {i+1}",
+            key=f"topic_contact_{i+1}"
+        )
 
 # 3 Dedicated File Uploaders
 st.subheader("📎 Curriculum, Scheme & Note Uploads (Optional)")
@@ -327,6 +333,15 @@ if st.button("Generate Inspection Plans", type="primary"):
             if extracted_notes:
                 combined_docs += f"\n\n--- REFERENCE NOTES / TEXTBOOK EXTRACT ---\n{extracted_notes[:5000]}"
 
+            # Format the specific user-provided contact topics
+            topic_instructions = []
+            for k, v in contact_topics.items():
+                if v.strip():
+                    topic_instructions.append(f"{k}: Use exact topic '{v.strip()}'")
+                else:
+                    topic_instructions.append(f"{k}: Derive appropriate specific sub-topic from the scheme")
+            topic_summary = "\n".join(topic_instructions)
+
             prompt = f"""
             You are an expert Inspectorate Curriculum Specialist for Noble Guide Academy, Abuja.
             The school operates an annual session structured as 3 terms, each having 8 teaching weeks, with subjects having between 1 to 5 contacts/lessons per week.
@@ -346,23 +361,26 @@ if st.button("Generate Inspection Plans", type="primary"):
             - No. in Class: {no_in_class}
             - Unit Topic: {unit_topic}
             - Reference Books: {textbooks}
-            - Contact Topics: {custom_topics if custom_topics.strip() else f"Derive {lesson_count} distinct sequential lesson topics based on {term_selected}, {week_selected}"}
+
+            EXACT LESSON TOPIC ASSIGNMENTS:
+            {topic_summary}
 
             CURRICULUM SPECIFICATIONS, SCHEME OF WORK & REFERENCE MATERIAL:
             {combined_docs}
 
             PEDAGOGICAL REQUIREMENTS:
-            1. TARGETED EXTRACTION: Specifically isolate and teach the curriculum codes and concepts assigned to {term_selected} and {week_selected}.
-            2. BLOOM'S TAXONOMY DERIVATION: Break down syllabus statements into measurable objectives starting with active Bloom's verbs across Cognitive, Psychomotor, and Affective domains. Each objective must display its syllabus code (e.g., [CHE1.1.1]).
-            3. GUIDED PRACTICE: EVERY individual active learning step MUST begin with its corresponding framework code, e.g., "[CHE1.1.1] Students examine unknown salt solutions in test tubes...".
-            4. LESSON SUMMARY NOTES: Generate 3-4 bullet points summarizing the core teaching content for this lesson (derived from the scheme/notes/framework).
-            5. HOD SECTION: The "hod_comment" field must be empty ("").
-            6. RESOURCES:
+            1. LESSON TOPIC FIDELITY: For each lesson, set the "lesson_topic" field to the corresponding topic specified above. If the teacher did not supply an exact topic, derive a precise, granular sub-topic for that period.
+            2. TARGETED EXTRACTION: Specifically isolate and teach the curriculum codes and concepts assigned to {term_selected} and {week_selected}.
+            3. BLOOM'S TAXONOMY DERIVATION: Break down syllabus statements into measurable objectives starting with active Bloom's verbs across Cognitive, Psychomotor, and Affective domains. Each objective must display its syllabus code (e.g., [CHE1.1.1]).
+            4. GUIDED PRACTICE: EVERY individual active learning step MUST begin with its corresponding framework code, e.g., "[CHE1.1.1] Students examine unknown salt solutions in test tubes...".
+            5. LESSON SUMMARY NOTES: Generate 3-4 bullet points summarizing the core teaching content for this lesson (derived from the scheme/notes/framework).
+            6. HOD SECTION: The "hod_comment" field must be empty ("").
+            7. RESOURCES:
                - Specific YouTube search video recommendation: "Video: [Title] - [Channel] (YouTube)"
                - Simulation/lab apparatus: "Simulation: PhET Interactive Simulations - [Topic]" or lab reagents.
-            7. PRIOR KNOWLEDGE: format "The students are familiar with...".
-            8. CLOSURE: "Concludes the lesson by giving a neat and tidy summary of the lesson.".
-            9. Output must be strictly a JSON array with exactly {lesson_count} objects (Lesson 1 to Lesson {lesson_count}).
+            8. PRIOR KNOWLEDGE: format "The students are familiar with...".
+            9. CLOSURE: "Concludes the lesson by giving a neat and tidy summary of the lesson.".
+            10. Output must be strictly a JSON array with exactly {lesson_count} objects (Lesson 1 to Lesson {lesson_count}).
 
             JSON Schema keys per item:
             "school_name", "staff_name", "subject", "unit_topic", "lesson_topic", "date", "period", "week", "lesson_number", "sex", "duration", "class_name", "no_in_class", "objectives", "resources", "references", "prior_knowledge", "direct_teaching", "guided_practice", "summary_notes", "evaluation", "closure", "assignment", "hod_comment"
