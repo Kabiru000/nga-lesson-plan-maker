@@ -81,7 +81,6 @@ def generate_docx_bytes(plans_data: list, term_label: str) -> io.BytesIO:
         r_plan.font.size = Pt(11)
         r_plan.font.name = "Times New Roman"
 
-        # 1-Row, 3-Column Header Table
         meta_table = doc.add_table(rows=1, cols=3)
         meta_table.style = "Table Grid"
         meta_table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -222,7 +221,6 @@ def execute_generation_with_retry(client, prompt: str):
             raise err
     raise last_error
 
-# --- API KEY MEMORY MANAGEMENT ---
 query_params = st.query_params
 saved_key = query_params.get("k", "")
 
@@ -296,36 +294,38 @@ custom_topics = st.text_area(
     placeholder="Lesson 1: Identification of Cations using Aqueous NaOH\nLesson 2: Confirmatory Tests for Aqueous Anions\nLesson 3: Titration and Volumetric Calculations"
 )
 
-# File Upload Section
-st.subheader("📎 Annual Session Scheme & Material Uploads (Optional)")
-st.info("💡 You can upload your entire Session Scheme of Work once. The AI will locate the exact content matching your selected Term and Week.")
-u_col1, u_col2 = st.columns(2)
+# 3 Dedicated File Uploaders
+st.subheader("📎 Curriculum, Scheme & Note Uploads (Optional)")
+u_col1, u_col2, u_col3 = st.columns(3)
 with u_col1:
-    framework_file = st.file_uploader("Upload Annual Scheme of Work (Session Document: Terms 1-3) [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"])
+    curriculum_file = st.file_uploader("1. Curriculum Framework [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"])
 with u_col2:
-    notes_file = st.file_uploader("Upload Reference Notes / Textbook Extract [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"])
+    scheme_file = st.file_uploader("2. Annual Scheme of Work [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"])
+with u_col3:
+    notes_file = st.file_uploader("3. Lesson Notes / Textbook [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"])
 
 scheme_detail = st.text_area(
-    f"Curriculum Objectives & Codes for {term_selected}, {week_selected} (Paste here if not uploading file):",
-    height=110,
+    f"Curriculum Objectives & Codes for {term_selected}, {week_selected} (Optional: paste here if not uploading files):",
+    height=100,
     placeholder="CHE1.1.1 Identify Cations and Anions in a solution.\nCHE1.1.2 Test for aqueous cations using sodium hydroxide."
 )
 
 if st.button("Generate Inspection Plans", type="primary"):
-    extracted_scheme = extract_file_text(framework_file)
+    extracted_curriculum = extract_file_text(curriculum_file)
+    extracted_scheme = extract_file_text(scheme_file)
     extracted_notes = extract_file_text(notes_file)
 
-    if not scheme_detail.strip() and not extracted_scheme:
-        st.warning(f"Please either paste the objectives for {term_selected} {week_selected} or upload the scheme file above.")
+    if not scheme_detail.strip() and not extracted_scheme and not extracted_curriculum:
+        st.warning(f"Please upload your Curriculum Framework, Scheme of Work, or paste the objectives for {term_selected} {week_selected}.")
     else:
-        with st.spinner(f"Parsing {term_selected} - {week_selected} and generating {lesson_count} lesson plan(s)..."):
-            notes_prompt_section = ""
-            if extracted_notes:
-                notes_prompt_section = f"\nREFERENCE LESSON NOTES / TEXTBOOK EXTRACT:\n{extracted_notes[:5000]}\n"
-
-            scheme_prompt_section = scheme_detail.strip()
+        with st.spinner(f"Parsing curriculum data for {term_selected} - {week_selected} and generating {lesson_count} lesson plan(s)..."):
+            combined_docs = scheme_detail.strip()
+            if extracted_curriculum:
+                combined_docs += f"\n\n--- CURRICULUM FRAMEWORK EXTRACT ---\n{extracted_curriculum[:6000]}"
             if extracted_scheme:
-                scheme_prompt_section += f"\n\n--- FULL SESSION SCHEME OF WORK EXTRACT (LOCATE {term_selected.upper()} AND {week_selected.upper()}) ---\n{extracted_scheme[:12000]}"
+                combined_docs += f"\n\n--- ANNUAL SCHEME OF WORK (LOCATE {term_selected.upper()} AND {week_selected.upper()}) ---\n{extracted_scheme[:10000]}"
+            if extracted_notes:
+                combined_docs += f"\n\n--- REFERENCE NOTES / TEXTBOOK EXTRACT ---\n{extracted_notes[:5000]}"
 
             prompt = f"""
             You are an expert Inspectorate Curriculum Specialist for Noble Guide Academy, Abuja.
@@ -348,15 +348,14 @@ if st.button("Generate Inspection Plans", type="primary"):
             - Reference Books: {textbooks}
             - Contact Topics: {custom_topics if custom_topics.strip() else f"Derive {lesson_count} distinct sequential lesson topics based on {term_selected}, {week_selected}"}
 
-            CURRICULUM SPECIFICATIONS & SCHEME OF WORK:
-            {scheme_prompt_section}
-            {notes_prompt_section}
+            CURRICULUM SPECIFICATIONS, SCHEME OF WORK & REFERENCE MATERIAL:
+            {combined_docs}
 
             PEDAGOGICAL REQUIREMENTS:
             1. TARGETED EXTRACTION: Specifically isolate and teach the curriculum codes and concepts assigned to {term_selected} and {week_selected}.
             2. BLOOM'S TAXONOMY DERIVATION: Break down syllabus statements into measurable objectives starting with active Bloom's verbs across Cognitive, Psychomotor, and Affective domains. Each objective must display its syllabus code (e.g., [CHE1.1.1]).
             3. GUIDED PRACTICE: EVERY individual active learning step MUST begin with its corresponding framework code, e.g., "[CHE1.1.1] Students examine unknown salt solutions in test tubes...".
-            4. LESSON SUMMARY NOTES: Generate 3-4 bullet points summarizing the core teaching content for this lesson (derived from the scheme/notes).
+            4. LESSON SUMMARY NOTES: Generate 3-4 bullet points summarizing the core teaching content for this lesson (derived from the scheme/notes/framework).
             5. HOD SECTION: The "hod_comment" field must be empty ("").
             6. RESOURCES:
                - Specific YouTube search video recommendation: "Video: [Title] - [Channel] (YouTube)"
