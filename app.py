@@ -3,6 +3,7 @@ import json
 import io
 import os
 import time
+from pypdf import PdfReader
 from google import genai
 from google.genai import types
 from docx import Document
@@ -12,7 +13,24 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
 
-st.set_page_config(page_title="Noble Guide Academy Lesson Plan Generator", layout="centered")
+st.set_page_config(page_title="Noble Guide Academy Lesson Plan Generator", layout="wide")
+
+def extract_file_text(uploaded_file) -> str:
+    if uploaded_file is None:
+        return ""
+    fname = uploaded_file.name.lower()
+    try:
+        if fname.endswith(".pdf"):
+            reader = PdfReader(uploaded_file)
+            return "\n".join([page.extract_text() or "" for page in reader.pages])
+        elif fname.endswith(".docx"):
+            d = Document(uploaded_file)
+            return "\n".join([p.text for p in d.paragraphs if p.text])
+        elif fname.endswith(".txt"):
+            return uploaded_file.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        st.warning(f"Could not read {uploaded_file.name}: {e}")
+    return ""
 
 def set_cell_margins(cell, top=70, bottom=70, left=100, right=100):
     tcPr = cell._tc.get_or_add_tcPr()
@@ -26,7 +44,7 @@ def set_cell_margins(cell, top=70, bottom=70, left=100, right=100):
     )
     tcPr.append(tcMar)
 
-def generate_docx_bytes(plans_data: list) -> io.BytesIO:
+def generate_docx_bytes(plans_data: list, term_label: str) -> io.BytesIO:
     doc = Document()
 
     for section in doc.sections:
@@ -58,11 +76,12 @@ def generate_docx_bytes(plans_data: list) -> io.BytesIO:
         r_school.font.size = Pt(13)
         r_school.font.name = "Times New Roman"
 
-        r_plan = p_title.add_run("Lesson Plan")
+        r_plan = p_title.add_run(f"Lesson Plan - {term_label}")
         r_plan.bold = True
         r_plan.font.size = Pt(11)
         r_plan.font.name = "Times New Roman"
 
+        # 1-Row, 3-Column Header Table
         meta_table = doc.add_table(rows=1, cols=3)
         meta_table.style = "Table Grid"
         meta_table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -113,10 +132,11 @@ def generate_docx_bytes(plans_data: list) -> io.BytesIO:
             ("Prior Knowledge and Connection:", plan.get('prior_knowledge', ''), "none"),
             ("Direct Teaching:", plan.get('direct_teaching', ''), "diamond"),
             ("Guided Practice (Students’ Active Learning):", plan.get('guided_practice', ''), "diamond"),
+            ("Lesson Summary Notes:", plan.get('summary_notes', ''), "hyphen"),
             ("Evaluation:", plan.get('evaluation', ''), "hyphen"),
             ("Closure (Plenary):", plan.get('closure', 'Concludes the lesson by giving a neat and tidy summary of the lesson.'), "none"),
             ("Assignment:", plan.get('assignment', ''), "hyphen"),
-            ("HoD’s Comment And Signature:", plan.get('hod_comment', ''), "none")
+            ("HoD’s Comment And Signature:", "", "none")
         ]
 
         for heading, body_text, bullet_type in sections:
@@ -137,34 +157,39 @@ def generate_docx_bytes(plans_data: list) -> io.BytesIO:
             r_head.font.size = Pt(10)
             r_head.font.name = "Times New Roman"
 
-            lines = [line.strip() for line in str(body_text).split("\n") if line.strip()]
-            for l_idx, line in enumerate(lines):
-                p_item = cell.add_paragraph()
-                p_item.paragraph_format.space_before = Pt(1)
-                p_item.paragraph_format.space_after = Pt(1)
-                p_item.paragraph_format.line_spacing = 1.15
+            if heading.startswith("HoD’s Comment"):
+                p_empty = cell.add_paragraph()
+                p_empty.paragraph_format.space_before = Pt(18)
+                p_empty.paragraph_format.space_after = Pt(18)
+            else:
+                lines = [line.strip() for line in str(body_text).split("\n") if line.strip()]
+                for l_idx, line in enumerate(lines):
+                    p_item = cell.add_paragraph()
+                    p_item.paragraph_format.space_before = Pt(1)
+                    p_item.paragraph_format.space_after = Pt(1)
+                    p_item.paragraph_format.line_spacing = 1.15
 
-                clean_text = line.lstrip("0123456789.-◆* ")
+                    clean_text = line.lstrip("0123456789.-◆* ")
 
-                if bullet_type == "decimal":
-                    p_item.paragraph_format.left_indent = Inches(0.2)
-                    r_item = p_item.add_run(f"{l_idx + 1}. {clean_text}")
-                    r_item.font.name = "Calibri"
-                    r_item.font.size = Pt(10)
-                elif bullet_type == "diamond":
-                    p_item.paragraph_format.left_indent = Inches(0.2)
-                    r_item = p_item.add_run(f"◆ {clean_text}")
-                    r_item.font.name = "Calibri"
-                    r_item.font.size = Pt(10)
-                elif bullet_type == "hyphen":
-                    p_item.paragraph_format.left_indent = Inches(0.2)
-                    r_item = p_item.add_run(f"- {clean_text}")
-                    r_item.font.name = "Calibri"
-                    r_item.font.size = Pt(10)
-                else:
-                    r_item = p_item.add_run(clean_text)
-                    r_item.font.name = "Times New Roman"
-                    r_item.font.size = Pt(9.5)
+                    if bullet_type == "decimal":
+                        p_item.paragraph_format.left_indent = Inches(0.2)
+                        r_item = p_item.add_run(f"{l_idx + 1}. {clean_text}")
+                        r_item.font.name = "Calibri"
+                        r_item.font.size = Pt(10)
+                    elif bullet_type == "diamond":
+                        p_item.paragraph_format.left_indent = Inches(0.2)
+                        r_item = p_item.add_run(f"◆ {clean_text}")
+                        r_item.font.name = "Calibri"
+                        r_item.font.size = Pt(10)
+                    elif bullet_type == "hyphen":
+                        p_item.paragraph_format.left_indent = Inches(0.2)
+                        r_item = p_item.add_run(f"- {clean_text}")
+                        r_item.font.name = "Calibri"
+                        r_item.font.size = Pt(10)
+                    else:
+                        r_item = p_item.add_run(clean_text)
+                        r_item.font.name = "Times New Roman"
+                        r_item.font.size = Pt(9.5)
 
             p_gap = doc.add_paragraph()
             p_gap.paragraph_format.space_before = Pt(2)
@@ -202,135 +227,157 @@ query_params = st.query_params
 saved_key = query_params.get("k", "")
 
 with st.sidebar:
-    st.header("🔑 Your Gemini Key")
-    st.markdown("Each teacher uses their own **free key** (20 plans/day). It costs $0.")
+    st.header("🔑 API Configuration")
     user_key = st.text_input(
-        "Enter your API Key:",
+        "Gemini API Key:",
         value=saved_key,
         type="password",
-        help="Get a free key in 30 seconds at aistudio.google.com"
+        help="Paste your free API key from aistudio.google.com"
     )
 
     if st.button("💾 Save Key to this Device"):
         if user_key.strip():
             st.query_params["k"] = user_key.strip()
-            st.success("Key remembered! Bookmark this page so you never have to enter it again.")
+            st.success("Key saved! Bookmark this URL.")
         else:
             st.query_params.clear()
             st.info("Key cleared.")
 
     st.markdown("---")
     st.markdown(
-        "**Need a free key?**\n"
-        "1. Go to [aistudio.google.com](https://aistudio.google.com)\n"
+        "**Get a Free Key:**\n"
+        "1. Open [aistudio.google.com](https://aistudio.google.com)\n"
         "2. Click **Get API key**\n"
-        "3. Copy and paste it here"
+        "3. Paste here and Save."
     )
 
 api_key = user_key.strip()
 
 st.title("📚 Noble Guide Academy Lesson Plan Generator")
-st.markdown("Inspectorate-compliant lesson planning configured for dynamic contacts and Bloom's Taxonomy domain alignment.")
+st.markdown("Annual Session Curriculum Management: 3 Terms × 8 Weeks × 1–5 Contacts per Subject")
 
 if not api_key:
-    st.warning("👈 Please enter your free Gemini API key in the left sidebar to start generating plans.")
+    st.warning("👈 Please enter your Gemini API key in the left sidebar to start generating plans.")
     st.stop()
 
-col1, col2 = st.columns(2)
-with col1:
+# --- SESSION SCHEDULE SELECTORS ---
+st.subheader("🗓️ Session & Term Scheduling")
+s_col1, s_col2, s_col3 = st.columns(3)
+with s_col1:
+    term_selected = st.selectbox("Select Term", ["Term 1 (First Term)", "Term 2 (Second Term)", "Term 3 (Third Term)"])
+with s_col2:
+    week_selected = st.selectbox("Select Week", [f"Week {i}" for i in range(1, 9)])
+with s_col3:
+    lesson_count = st.number_input("Contacts/Lessons for this Subject this Week", min_value=1, max_value=5, value=3, step=1)
+
+# --- CLASS & TEACHER METADATA ---
+st.subheader("📋 Teacher & Class Information")
+c1, c2 = st.columns(2)
+with c1:
     staff_name = st.text_input("Teacher's Full Name", value="AMINU KABIRU")
     subject = st.text_input("Subject", value="CHEMISTRY")
     class_name = st.text_input("Class", value="Year 11")
-    lesson_count = st.number_input("Number of Contacts/Lessons This Week", min_value=1, max_value=6, value=3, step=1)
-with col2:
-    week = st.text_input("Week Number", value="6")
-    date_schedule = st.text_input("Date(s) for the Week", value="7th & 8th June, 2026")
+with c2:
+    date_schedule = st.text_input("Date(s) for this Week", value="7th & 8th June, 2026")
     duration = st.text_input("Duration of Lesson", value="50minutes")
     no_in_class = st.text_input("Number in Class", value="20")
 
-unit_topic = st.text_input("Unit Topic", value="Chemical and investigations")
-textbooks = st.text_input("Reference Textbooks", value="New School Chemistry and Cambridge Chemistry Syllabus IGCSE Course Book")
+c3, c4 = st.columns(2)
+with c3:
+    unit_topic = st.text_input("Unit Topic for this Week", value="Chemical and investigations")
+with c4:
+    textbooks = st.text_input("Reference Textbooks", value="New School Chemistry and Cambridge Chemistry Syllabus IGCSE Course Book")
+
+# Dynamic Lesson Topic Configuration
+st.subheader("📖 Specific Topics for the Week's Contacts")
+custom_topics = st.text_area(
+    f"Topics for the {lesson_count} lessons (optional, one per line):",
+    height=80,
+    placeholder="Lesson 1: Identification of Cations using Aqueous NaOH\nLesson 2: Confirmatory Tests for Aqueous Anions\nLesson 3: Titration and Volumetric Calculations"
+)
+
+# File Upload Section
+st.subheader("📎 Annual Session Scheme & Material Uploads (Optional)")
+st.info("💡 You can upload your entire Session Scheme of Work once. The AI will locate the exact content matching your selected Term and Week.")
+u_col1, u_col2 = st.columns(2)
+with u_col1:
+    framework_file = st.file_uploader("Upload Annual Scheme of Work (Session Document: Terms 1-3) [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"])
+with u_col2:
+    notes_file = st.file_uploader("Upload Reference Notes / Textbook Extract [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"])
 
 scheme_detail = st.text_area(
-    "Curriculum Objectives & Codes (One per line)",
-    height=150,
-    placeholder="CHE1.1.1 Identify Cations and Anions in a solution.\nCHE1.1.2 Test for aqueous cations using sodium hydroxide and aqueous ammonia."
+    f"Curriculum Objectives & Codes for {term_selected}, {week_selected} (Paste here if not uploading file):",
+    height=110,
+    placeholder="CHE1.1.1 Identify Cations and Anions in a solution.\nCHE1.1.2 Test for aqueous cations using sodium hydroxide."
 )
 
 if st.button("Generate Inspection Plans", type="primary"):
-    if not scheme_detail.strip():
-        st.warning("Please supply at least one curriculum objective.")
+    extracted_scheme = extract_file_text(framework_file)
+    extracted_notes = extract_file_text(notes_file)
+
+    if not scheme_detail.strip() and not extracted_scheme:
+        st.warning(f"Please either paste the objectives for {term_selected} {week_selected} or upload the scheme file above.")
     else:
-        with st.spinner(f"Generating {lesson_count} lesson plan(s)..."):
+        with st.spinner(f"Parsing {term_selected} - {week_selected} and generating {lesson_count} lesson plan(s)..."):
+            notes_prompt_section = ""
+            if extracted_notes:
+                notes_prompt_section = f"\nREFERENCE LESSON NOTES / TEXTBOOK EXTRACT:\n{extracted_notes[:5000]}\n"
+
+            scheme_prompt_section = scheme_detail.strip()
+            if extracted_scheme:
+                scheme_prompt_section += f"\n\n--- FULL SESSION SCHEME OF WORK EXTRACT (LOCATE {term_selected.upper()} AND {week_selected.upper()}) ---\n{extracted_scheme[:12000]}"
+
             prompt = f"""
-            You are an expert Inspectorate Curriculum Specialist for Noble Guide Academy.
-            Transform the supplied Curriculum Objectives into exactly {lesson_count} sequential lesson plan(s) (from Lesson 1 up to Lesson {lesson_count}).
+            You are an expert Inspectorate Curriculum Specialist for Noble Guide Academy, Abuja.
+            The school operates an annual session structured as 3 terms, each having 8 teaching weeks, with subjects having between 1 to 5 contacts/lessons per week.
+
+            TARGET TIME FRAME:
+            - Term: {term_selected}
+            - Week: {week_selected}
+            - Number of Lessons/Contacts: {lesson_count}
 
             METADATA CONSTRAINTS:
             - Staff Name: {staff_name}
             - Subject: {subject}
             - Class: {class_name}
-            - Week: {week}
+            - Week: {week_selected}
             - Date: {date_schedule}
             - Duration: {duration}
             - No. in Class: {no_in_class}
             - Unit Topic: {unit_topic}
             - Reference Books: {textbooks}
+            - Contact Topics: {custom_topics if custom_topics.strip() else f"Derive {lesson_count} distinct sequential lesson topics based on {term_selected}, {week_selected}"}
 
-            SUPPLIED CURRICULUM OBJECTIVES:
-            {scheme_detail}
+            CURRICULUM SPECIFICATIONS & SCHEME OF WORK:
+            {scheme_prompt_section}
+            {notes_prompt_section}
 
-            CRITICAL PEDAGOGICAL RULES:
-            1. STRICT CURRICULUM FIDELITY: Do NOT invent entirely new topics or concepts outside what the teacher supplied above.
-            2. BLOOM'S TAXONOMY DERIVATION: Break down the teacher's supplied curriculum statements across appropriate learning domains (Cognitive: identify, explain, calculate, evaluate; Psychomotor: assemble, titrate, record, observe; Affective: collaborate, demonstrate care with reagents).
-            3. Each individual lesson objective must retain its original curriculum code (e.g., [CHE1.1.1]) and use a measurable Bloom's active verb.
-            4. Put EACH objective, teaching step, evaluation question, and assignment item on its own individual line.
-            5. 'resources' MUST include:
-               - Specific YouTube search video recommendation (e.g. FuseSchool, Cognito, Pearson, FreeScienceLessons). Format: "Video: [Title] - [Channel] (YouTube)"
-               - Practical apparatus or interactive simulation (e.g. "Simulation: PhET Interactive Simulations - [Topic]").
-            6. 'prior_knowledge' must start with: "The students are familiar with...".
-            7. 'closure' must be: "Concludes the lesson by giving a neat and tidy summary of the lesson.".
-            8. Return ONLY a valid JSON array of {lesson_count} objects. No conversational preamble.
+            PEDAGOGICAL REQUIREMENTS:
+            1. TARGETED EXTRACTION: Specifically isolate and teach the curriculum codes and concepts assigned to {term_selected} and {week_selected}.
+            2. BLOOM'S TAXONOMY DERIVATION: Break down syllabus statements into measurable objectives starting with active Bloom's verbs across Cognitive, Psychomotor, and Affective domains. Each objective must display its syllabus code (e.g., [CHE1.1.1]).
+            3. GUIDED PRACTICE: EVERY individual active learning step MUST begin with its corresponding framework code, e.g., "[CHE1.1.1] Students examine unknown salt solutions in test tubes...".
+            4. LESSON SUMMARY NOTES: Generate 3-4 bullet points summarizing the core teaching content for this lesson (derived from the scheme/notes).
+            5. HOD SECTION: The "hod_comment" field must be empty ("").
+            6. RESOURCES:
+               - Specific YouTube search video recommendation: "Video: [Title] - [Channel] (YouTube)"
+               - Simulation/lab apparatus: "Simulation: PhET Interactive Simulations - [Topic]" or lab reagents.
+            7. PRIOR KNOWLEDGE: format "The students are familiar with...".
+            8. CLOSURE: "Concludes the lesson by giving a neat and tidy summary of the lesson.".
+            9. Output must be strictly a JSON array with exactly {lesson_count} objects (Lesson 1 to Lesson {lesson_count}).
 
-            JSON Schema:
-            [
-              {{
-                "school_name": "Noble Guide Academy, Abuja",
-                "staff_name": "{staff_name}",
-                "subject": "{subject}",
-                "unit_topic": "{unit_topic}",
-                "lesson_topic": "Derived specific topic for this lesson",
-                "date": "{date_schedule}",
-                "period": "Period specified or e.g. 1st & 2nd",
-                "week": "{week}",
-                "lesson_number": "1",
-                "sex": "Mixed",
-                "duration": "{duration}",
-                "class_name": "{class_name}",
-                "no_in_class": "{no_in_class}",
-                "objectives": "string",
-                "resources": "string",
-                "references": "{textbooks}",
-                "prior_knowledge": "string",
-                "direct_teaching": "string",
-                "guided_practice": "string",
-                "evaluation": "string",
-                "closure": "Concludes the lesson by giving a neat and tidy summary of the lesson.",
-                "assignment": "string",
-                "hod_comment": ""
-              }}
-            ]
+            JSON Schema keys per item:
+            "school_name", "staff_name", "subject", "unit_topic", "lesson_topic", "date", "period", "week", "lesson_number", "sex", "duration", "class_name", "no_in_class", "objectives", "resources", "references", "prior_knowledge", "direct_teaching", "guided_practice", "summary_notes", "evaluation", "closure", "assignment", "hod_comment"
             """
             try:
                 client = genai.Client(api_key=api_key)
                 data = execute_generation_with_retry(client, prompt)
-                file_data = generate_docx_bytes(data)
+                file_data = generate_docx_bytes(data, term_selected)
 
-                st.success(f"{len(data)} lesson plan(s) generated successfully!")
+                st.success(f"Generated {len(data)} inspection lesson plan(s) for {term_selected}, {week_selected}!")
                 st.download_button(
-                    label="📥 Download Word Document (.docx)",
+                    label=f"📥 Download Word Document (.docx)",
                     data=file_data,
-                    file_name=f"NGA_Lesson_Plan_Week_{week}_{unit_topic.replace(' ', '_')}.docx",
+                    file_name=f"NGA_{term_selected.replace(' ', '_')}_{week_selected.replace(' ', '_')}_{subject}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
             except Exception as e:
