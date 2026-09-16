@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import io
 import os
+import re
 import time
 from pypdf import PdfReader
 import matplotlib
@@ -18,6 +19,17 @@ from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
 
 st.set_page_config(page_title="Noble Guide Academy Suite", layout="wide")
+
+def clean_json_response(raw_text: str):
+    """Strip markdown code block wrappers if present."""
+    text = raw_text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return json.loads(text.strip())
 
 def set_cell_margins(cell, top=70, bottom=70, left=100, right=100):
     tcPr = cell._tc.get_or_add_tcPr()
@@ -60,17 +72,17 @@ def execute_generation_with_retry(client, prompt: str):
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            return clean_json_response(response.text)
         except Exception as err:
             err_str = str(err)
             last_error = err
-            if any(k in err_str for k in ["503", "UNAVAILABLE"]):
-                time.sleep(2 * (attempt + 1))
+            if any(k in err_str for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED"]):
+                time.sleep(3 * (attempt + 1))
                 continue
             raise err
     raise last_error
 
-# --- Matplotlib Visual Graph Generator ($0 Cost) ---
+# --- Matplotlib Visual Graph Generator ---
 def generate_sample_topic_graph(graph_type: str) -> io.BytesIO:
     fig, ax = plt.subplots(figsize=(6, 3.5), dpi=150)
     fig.patch.set_facecolor('#ffffff')
@@ -274,7 +286,6 @@ def generate_astar_note_docx(note_data: dict, graph_type: str = "none") -> io.By
         section.left_margin = Inches(0.7)
         section.right_margin = Inches(0.7)
 
-    # Document Header
     p_head = doc.add_paragraph()
     p_head.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r_school = p_head.add_run("NOBLE GUIDE ACADEMY, ABUJA\n")
@@ -291,7 +302,7 @@ def generate_astar_note_docx(note_data: dict, graph_type: str = "none") -> io.By
     r_topic.font.size = Pt(10)
     r_topic.font.italic = True
 
-    # 1. Syllabus & Mark-Scheme Keywords Table
+    # 1. Vocabulary Table
     t1 = doc.add_table(rows=1, cols=1)
     t1.style = "Table Grid"
     c1 = t1.rows[0].cells[0]
@@ -307,11 +318,11 @@ def generate_astar_note_docx(note_data: dict, graph_type: str = "none") -> io.By
         p_k.paragraph_format.left_indent = Inches(0.2)
         r_term = p_k.add_run(f"• {kw.get('term', '')}: ")
         r_term.bold = True
-        r_def = p_k.add_run(kw.get('meaning', ''))
+        p_k.add_run(kw.get('meaning', ''))
 
     doc.add_paragraph().paragraph_format.space_before = Pt(4)
 
-    # 2. Comprehensive Core Scientific Notes
+    # 2. Core Concepts
     p_c = doc.add_paragraph()
     r_chead = p_c.add_run("📘 COMPREHENSIVE CONCEPT BREAKDOWN & MECHANISMS")
     r_chead.bold = True
@@ -331,7 +342,7 @@ def generate_astar_note_docx(note_data: dict, graph_type: str = "none") -> io.By
             r_bp.font.size = Pt(10)
             r_bp.font.name = "Calibri"
 
-    # Optional Graph / Diagram Embed
+    # Optional Graph Embed
     if graph_type != "none":
         doc.add_paragraph().paragraph_format.space_before = Pt(4)
         p_ghead = doc.add_paragraph()
@@ -349,7 +360,7 @@ def generate_astar_note_docx(note_data: dict, graph_type: str = "none") -> io.By
 
     doc.add_paragraph().paragraph_format.space_before = Pt(4)
 
-    # 3. Common Student Pitfalls & Examiner Traps Table
+    # 3. Pitfalls Table
     t_pit = doc.add_table(rows=1, cols=1)
     t_pit.style = "Table Grid"
     c_pit = t_pit.rows[0].cells[0]
@@ -369,7 +380,7 @@ def generate_astar_note_docx(note_data: dict, graph_type: str = "none") -> io.By
 
     doc.add_paragraph().paragraph_format.space_before = Pt(4)
 
-    # 4. Step-by-Step Model Calculation / Problem Solving
+    # 4. Worked Example
     if note_data.get("worked_example"):
         t_w = doc.add_table(rows=1, cols=1)
         t_w.style = "Table Grid"
@@ -418,11 +429,21 @@ if not api_key:
     st.warning("👈 Please enter your free Gemini API key in the left sidebar to access the suite.")
     st.stop()
 
+# --- INITIALIZE SESSION STATE ---
+if "note_docx" not in st.session_state:
+    st.session_state.note_docx = None
+if "note_filename" not in st.session_state:
+    st.session_state.note_filename = ""
+if "plans_docx" not in st.session_state:
+    st.session_state.plans_docx = None
+if "plans_filename" not in st.session_state:
+    st.session_state.plans_filename = ""
+
 # --- TAB NAVIGATION ---
 tab_plans, tab_notes = st.tabs(["📋 Lesson Plan Generator", "🌟 A* Comprehensive Lesson Notes"])
 
 # =======================================================
-# TAB 1: LESSON PLAN GENERATOR (EXISTING LOGIC)
+# TAB 1: LESSON PLAN GENERATOR
 # =======================================================
 with tab_plans:
     st.subheader("🗓️ Session & Term Scheduling")
@@ -537,8 +558,8 @@ with tab_plans:
                 3. GUIDED PRACTICE: EVERY individual active learning step MUST explicitly begin with its matching curriculum framework code, e.g., "[CHE1.1.1] Students test unknown solutions using aqueous sodium hydroxide...".
                 4. INSTRUCTIONAL RESOURCES & WORKING URL LINKS:
                    - The 'resources' field MUST include actual clickable text URLs:
-                     * A direct YouTube search URL: "YouTube Video: [Video Title/Topic] - https://www.youtube.com/results?search_query=[encoded+search+terms]"
-                     * An interactive PhET simulation URL: "PhET Simulation: [Simulation Title] - https://phet.colorado.edu/en/simulations/filter?subjects=[topic]&type=html"
+                     * A direct YouTube search URL: "YouTube Video: [Video Title/Topic] - [https://www.youtube.com/results?search_query=](https://www.youtube.com/results?search_query=)[encoded+search+terms]"
+                     * An interactive PhET simulation URL: "PhET Simulation: [Simulation Title] - [https://phet.colorado.edu/en/simulations/filter?subjects=](https://phet.colorado.edu/en/simulations/filter?subjects=)[topic]&type=html"
                      * Key concrete apparatus/reagents needed.
                 5. LESSON SUMMARY NOTES: Provide 3-4 bullet points summarizing key concepts taught in this lesson (derived from the notes/framework). This will appear directly below Closure.
                 6. CLOSURE (PLENARY): Must be exactly: "Concludes the lesson by giving a neat and tidy summary of the lesson.".
@@ -551,17 +572,20 @@ with tab_plans:
                 try:
                     client = genai.Client(api_key=api_key)
                     data = execute_generation_with_retry(client, prompt)
-                    file_data = generate_docx_bytes(data, term_selected)
-
-                    st.success(f"Generated {len(data)} inspection lesson plan(s) for {term_selected}, {week_selected}!")
-                    st.download_button(
-                        label=f"📥 Download Lesson Plans (.docx)",
-                        data=file_data,
-                        file_name=f"NGA_{term_selected.replace(' ', '_')}_{week_selected.replace(' ', '_')}_{subject}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    )
+                    st.session_state.plans_docx = generate_docx_bytes(data, term_selected)
+                    st.session_state.plans_filename = f"NGA_{term_selected.replace(' ', '_')}_{week_selected.replace(' ', '_')}_{subject}.docx"
                 except Exception as e:
                     st.error(f"Generation error: {e}")
+
+    if st.session_state.plans_docx:
+        st.success("Inspection plans ready!")
+        st.download_button(
+            label="📥 Download Lesson Plans (.docx)",
+            data=st.session_state.plans_docx,
+            file_name=st.session_state.plans_filename,
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="dl_plans"
+        )
 
 # =======================================================
 # TAB 2: A* COMPREHENSIVE LESSON NOTE GENERATOR
@@ -579,14 +603,16 @@ with tab_notes:
         graph_type = st.selectbox(
             "Auto-Embed Scientific Graph/Diagram Figure:",
             ["none", "Rate of Reaction (Volume vs Time)", "Heating/Cooling Curve (Phase Changes)", "Generic Trend Analysis"],
-            index=1
+            index=1,
+            key="an_graph"
         )
         textbook_file = st.file_uploader("Upload Textbook Chapter / Revision Note [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"], key="an_file")
 
     an_extra_details = st.text_area(
         "Key Syllabus Codes or Focus Points (Optional):",
         placeholder="Focus on the effect of concentration, surface area, and catalyst on effective collisions.",
-        height=80
+        height=80,
+        key="an_extra"
     )
 
     if st.button("Generate A* Comprehensive Lesson Note", type="primary", key="btn_gen_notes"):
@@ -607,7 +633,7 @@ with tab_notes:
             2. DETAILED CORE SECTIONS: 3 to 4 distinct conceptual subheadings. Under each subheading, provide exhaustive, in-depth bullet points explaining the core mechanism, definitions, and equations. Do not skim or summarize vaguely.
             3. EXAMINER WARNING / COMMON PITFALLS: Provide 3-4 specific misconceptions where students lose marks (e.g., stating particles vibrate faster when heated in liquids, or confusing rate with yield).
             4. WORKED MODEL EXAMPLE: A step-by-step numerical or analytical question with a complete model answer showing how full marks are secured.
-            5. Return strictly a JSON object conforming to the schema.
+            5. Return strictly a single JSON object conforming to the schema.
 
             JSON Schema:
             {{
@@ -635,14 +661,17 @@ with tab_notes:
             try:
                 client = genai.Client(api_key=api_key)
                 note_json = execute_generation_with_retry(client, note_prompt)
-                note_docx = generate_astar_note_docx(note_json, graph_type)
-
-                st.success(f"A* Lesson Note for '{an_topic}' generated successfully!")
-                st.download_button(
-                    label="📥 Download A* Lesson Note (.docx)",
-                    data=note_docx,
-                    file_name=f"NGA_AStar_Note_{an_topic.replace(' ', '_')}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
+                st.session_state.note_docx = generate_astar_note_docx(note_json, graph_type)
+                st.session_state.note_filename = f"NGA_AStar_Note_{an_topic.replace(' ', '_')}.docx"
             except Exception as e:
                 st.error(f"Generation error: {e}")
+
+    if st.session_state.note_docx:
+        st.success(f"A* Lesson Note for '{an_topic}' generated successfully!")
+        st.download_button(
+            label="📥 Download A* Lesson Note (.docx)",
+            data=st.session_state.note_docx,
+            file_name=st.session_state.note_filename,
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="dl_notes"
+        )
