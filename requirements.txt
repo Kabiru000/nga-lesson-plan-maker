@@ -2,4 +2,6 @@ streamlit
 python-docx
 google-genai
 pypdf
+pymupdf
 matplotlib
+pillow
