@@ -15,14 +15,14 @@ from google.genai import types
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
-from docx.oxml import parse_xml, OxmlElement
-from docx.oxml.ns import nsdecls, qn
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
 
 st.set_page_config(page_title="Noble Guide Academy Suite", layout="wide")
 
-# --- UI Styling Utilities ---
-def set_cell_margins(cell, top=100, bottom=100, left=140, right=140):
+# --- Publication Styling Utilities ---
+def set_cell_margins(cell, top=120, bottom=120, left=160, right=160):
     tcPr = cell._tc.get_or_add_tcPr()
     tcMar = parse_xml(
         f'<w:tcMar {nsdecls("w")}>'
@@ -39,59 +39,68 @@ def set_cell_shading(cell, color_hex: str):
     shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{color_hex}"/>')
     tcPr.append(shd)
 
-def add_styled_heading(doc, text: str, level: int = 1):
-    p = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(12)
-    p.paragraph_format.space_after = Pt(4)
-    p.paragraph_format.keep_with_next = True
-    run = p.add_run(text)
-    run.bold = True
-    run.font.name = "Arial"
-    if level == 1:
-        run.font.size = Pt(12)
-        run.font.color.rgb = RGBColor(0, 51, 102) # Cambridge Navy
-    elif level == 2:
-        run.font.size = Pt(11)
-        run.font.color.rgb = RGBColor(40, 40, 40)
-    return p
+def clean_json_response(raw_text: str):
+    text = raw_text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return json.loads(text.strip())
 
-def format_chemical_text(paragraph, text: str):
-    """
-    Renders clean chemistry text, converting arrows and automatically
-    subscripting numbers inside chemical formulas.
-    """
-    text = text.replace("->", " → ").replace("<=>", " ⇌ ")
-    tokens = re.split(r'(\s+|[()+→⇌=Δ])', text)
+def format_equation_line(p, eq_str: str):
+    """Renders clean chemical and mathematical equations with proper sub/superscripts."""
+    clean_eq = eq_str.replace("->", " → ").replace("<=>", " ⇌ ")
+    tokens = re.split(r'(\s+|[()+→⇌=Δ])', clean_eq)
     for token in tokens:
         if not token:
             continue
-        # Check if token looks like a chemical formula with numbers (e.g., H2SO4, CaCO3)
-        if re.search(r'[A-Z][a-z]?\d+', token):
+        # Superscript ionic charges like 2+, 3+, 2-, +, -
+        if re.fullmatch(r'\d*[\+\-]', token):
+            r = p.add_run(token)
+            r.font.superscript = True
+            r.font.name = "Cambria Math"
+            r.font.size = Pt(11)
+            r.bold = True
+        # Subscript chemical formulas like H2SO4, CaCO3
+        elif re.search(r'[A-Z][a-z]?\d+', token):
             sub_parts = re.split(r'(\d+)', token)
             for sp in sub_parts:
+                r = p.add_run(sp)
+                r.font.name = "Cambria Math"
+                r.font.size = Pt(11)
                 if sp.isdigit():
-                    r = paragraph.add_run(sp)
                     r.font.subscript = True
-                    r.font.name = "Calibri"
-                    r.font.size = Pt(10)
-                else:
-                    r = paragraph.add_run(sp)
-                    r.font.name = "Calibri"
-                    r.font.size = Pt(10)
         else:
-            r = paragraph.add_run(token)
-            r.font.name = "Calibri"
-            r.font.size = Pt(10)
+            r = p.add_run(token)
+            r.font.name = "Cambria Math"
+            r.font.size = Pt(11)
+            if token in ["→", "⇌", "="]:
+                r.bold = True
 
-# --- PDF Multimodal Extraction (Text + Embedded Images) ---
+def format_body_text(paragraph, text: str):
+    """Formats standard body runs with proper typography."""
+    paragraph.paragraph_format.space_before = Pt(3)
+    paragraph.paragraph_format.space_after = Pt(4)
+    paragraph.paragraph_format.line_spacing = 1.2
+    
+    parts = re.split(r'(\*\*.*?\*\*)', text)
+    for part in parts:
+        if part.startswith("**") and part.endswith("**"):
+            r = paragraph.add_run(part[2:-2])
+            r.bold = True
+            r.font.name = "Calibri"
+            r.font.size = Pt(10.5)
+        else:
+            r = paragraph.add_run(part)
+            r.font.name = "Calibri"
+            r.font.size = Pt(10.5)
+
+# --- PDF Image Extraction ---
 def extract_pdf_data_with_images(uploaded_file):
-    """
-    Extracts text and real diagram images from PDF using PyMuPDF.
-    Filters out decorative icons/logos, returning real apparatus and figures.
-    """
     if uploaded_file is None:
         return "", []
-    
     file_bytes = uploaded_file.read()
     uploaded_file.seek(0)
     
@@ -102,24 +111,20 @@ def extract_pdf_data_with_images(uploaded_file):
     for page_idx in range(len(doc)):
         page = doc[page_idx]
         extracted_text.append(page.get_text())
-        
-        image_list = page.get_images(full=True)
-        for img_info in image_list:
+        for img_info in page.get_images(full=True):
             xref = img_info[0]
             base_image = doc.extract_image(xref)
-            image_bytes = base_image["image"]
             width = base_image["width"]
             height = base_image["height"]
             
-            # Filter out tiny icons, buttons, banners (Keep only substantive diagrams)
-            if width > 180 and height > 140 and (width * height > 35000):
+            # Keep only medium/large substantive figures
+            if width > 220 and height > 160 and (width * height > 45000):
                 try:
-                    img = Image.open(io.BytesIO(image_bytes))
-                    # Convert CMYK/RGBA if needed to RGB for Word compatibility
+                    img = Image.open(io.BytesIO(base_image["image"]))
                     if img.mode not in ("RGB", "L"):
                         img = img.convert("RGB")
                     buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=90)
+                    img.save(buf, format="JPEG", quality=92)
                     buf.seek(0)
                     extracted_images.append({
                         "bytes": buf,
@@ -132,16 +137,6 @@ def extract_pdf_data_with_images(uploaded_file):
 
     return "\n".join(extracted_text), extracted_images
 
-def clean_json_response(raw_text: str):
-    text = raw_text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    elif text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    return json.loads(text.strip())
-
 def execute_generation_with_retry(client, prompt: str):
     last_error = None
     for attempt in range(3):
@@ -150,7 +145,7 @@ def execute_generation_with_retry(client, prompt: str):
                 model="gemini-3.6-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.2,
+                    temperature=0.15,
                     response_mime_type="application/json"
                 )
             )
@@ -166,7 +161,7 @@ def execute_generation_with_retry(client, prompt: str):
 
 # --- Matplotlib Scientific Graph Engine ---
 def generate_sample_topic_graph(graph_type: str) -> io.BytesIO:
-    fig, ax = plt.subplots(figsize=(6.2, 3.2), dpi=180)
+    fig, ax = plt.subplots(figsize=(6.4, 3.2), dpi=180)
     fig.patch.set_facecolor('#ffffff')
     ax.set_facecolor('#fdfdfd')
 
@@ -174,32 +169,28 @@ def generate_sample_topic_graph(graph_type: str) -> io.BytesIO:
         t = np.linspace(0, 100, 200)
         c1 = 100 * (1 - np.exp(-0.05 * t))
         c2 = 100 * (1 - np.exp(-0.02 * t))
-        ax.plot(t, c1, color='#004080', label='High Concentration / Catalyst (Steeper Initial Gradient)', linewidth=2.2)
-        ax.plot(t, c2, color='#c0392b', linestyle='--', label='Lower Concentration / Room Temp', linewidth=2.0)
-        ax.set_title("Reaction Kinetics: Gas Evolution vs Time", fontsize=10.5, fontweight='bold', pad=10)
+        ax.plot(t, c1, color='#004080', label='Steep Initial Gradient (High Conc / Catalyst)', linewidth=2.2)
+        ax.plot(t, c2, color='#c0392b', linestyle='--', label='Lower Gradient (Lower Conc)', linewidth=2.0)
+        ax.set_title("Reaction Kinetics: Gas Evolution vs Time", fontsize=10, fontweight='bold', pad=8)
         ax.set_xlabel("Time (s)", fontsize=9, fontweight='bold')
         ax.set_ylabel("Volume of Gas (cm³)", fontsize=9, fontweight='bold')
-        ax.legend(fontsize=8, loc="lower right", framealpha=0.9)
+        ax.legend(fontsize=8, loc="lower right")
         ax.grid(True, linestyle=':', alpha=0.5)
     elif "heating" in graph_type.lower() or "cooling" in graph_type.lower():
         time_pts = [0, 2, 5, 8, 11, 14]
         temps = [20, 80, 80, 120, 120, 140]
         ax.plot(time_pts, temps, color='#d35400', linewidth=2.4, marker='o', markersize=4)
-        ax.set_title("Heating Curve: Constant Temperature Phase Transitions", fontsize=10.5, fontweight='bold', pad=10)
-        ax.set_xlabel("Time of Heating (min)", fontsize=9, fontweight='bold')
+        ax.set_title("Heating Curve: Constant Temperature During Phase Changes", fontsize=10, fontweight='bold', pad=8)
+        ax.set_xlabel("Time (min)", fontsize=9, fontweight='bold')
         ax.set_ylabel("Temperature (°C)", fontsize=9, fontweight='bold')
-        ax.annotate('Melting Point (Solid + Liquid)', xy=(3.5, 80), xytext=(1.5, 96),
-                    arrowprops=dict(arrowstyle="->", color="black", lw=1.2))
-        ax.annotate('Boiling Point (Liquid + Gas)', xy=(9.5, 120), xytext=(7.5, 134),
-                    arrowprops=dict(arrowstyle="->", color="black", lw=1.2))
+        ax.annotate('Melting Point', xy=(3.5, 80), xytext=(1.5, 96), arrowprops=dict(arrowstyle="->", color="black"))
+        ax.annotate('Boiling Point', xy=(9.5, 120), xytext=(7.5, 134), arrowprops=dict(arrowstyle="->", color="black"))
         ax.grid(True, linestyle=':', alpha=0.5)
     else:
         x = np.linspace(0, 10, 100)
         y = np.sin(x)
         ax.plot(x, y, color='#2c3e50', linewidth=2)
-        ax.set_title("Scientific Quantitative Profile", fontsize=10.5, fontweight='bold', pad=10)
-        ax.set_xlabel("Independent Variable", fontsize=9)
-        ax.set_ylabel("Dependent Variable", fontsize=9)
+        ax.set_title("Scientific Quantitative Profile", fontsize=10, fontweight='bold', pad=8)
         ax.grid(True, linestyle=':', alpha=0.5)
 
     plt.tight_layout()
@@ -209,7 +200,7 @@ def generate_sample_topic_graph(graph_type: str) -> io.BytesIO:
     img_buf.seek(0)
     return img_buf
 
-# --- DOCX Builder: Professional A* Lesson Note ---
+# --- DOCX Builder: Publication A* Lesson Note ---
 def generate_astar_note_docx(note_data: dict, extracted_images: list, graph_type: str = "none") -> io.BytesIO:
     doc = Document()
     for section in doc.sections:
@@ -218,7 +209,7 @@ def generate_astar_note_docx(note_data: dict, extracted_images: list, graph_type
         section.left_margin = Inches(0.7)
         section.right_margin = Inches(0.7)
 
-    # 1. Publication Masthead
+    # 1. School Header
     p_mast = doc.add_paragraph()
     p_mast.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p_mast.paragraph_format.space_before = Pt(0)
@@ -230,21 +221,21 @@ def generate_astar_note_docx(note_data: dict, extracted_images: list, graph_type
     r_inst.font.size = Pt(13)
     r_inst.font.color.rgb = RGBColor(0, 51, 102)
 
-    r_banner = p_mast.add_run("A* TARGETED COMPREHENSIVE LEARNER RESOURCE\n")
+    r_banner = p_mast.add_run("A* COMPREHENSIVE LEARNER SPECIFICATION RESOURCE\n")
     r_banner.bold = True
     r_banner.font.name = "Arial"
-    r_banner.font.size = Pt(10)
-    r_banner.font.color.rgb = RGBColor(110, 110, 110)
+    r_banner.font.size = Pt(9.5)
+    r_banner.font.color.rgb = RGBColor(100, 100, 100)
 
-    # Topic Ribbon Table
+    # Topic Ribbon
     ribbon = doc.add_table(rows=1, cols=3)
     ribbon.style = "Table Grid"
     ribbon.alignment = WD_TABLE_ALIGNMENT.CENTER
     col_w = (Inches(2.5), Inches(3.0), Inches(1.5))
     for c, w in zip(ribbon.rows[0].cells, col_w):
         c.width = w
-        set_cell_margins(c, top=60, bottom=60, left=100, right=100)
-        set_cell_shading(c, "003366") # Deep navy background
+        set_cell_margins(c, top=60, bottom=60, left=90, right=90)
+        set_cell_shading(c, "003366")
 
     labels = [
         f"SUBJECT: {note_data.get('subject', '').upper()}",
@@ -260,20 +251,20 @@ def generate_astar_note_docx(note_data: dict, extracted_images: list, graph_type
         r.font.size = Pt(8.5)
         r.font.color.rgb = RGBColor(255, 255, 255)
 
-    doc.add_paragraph().paragraph_format.space_before = Pt(4)
+    doc.add_paragraph().paragraph_format.space_before = Pt(6)
 
-    # 2. Examiner Mandatory Vocabulary Box
+    # 2. Vocabulary Box
     t_voc = doc.add_table(rows=1, cols=1)
     t_voc.style = "Table Grid"
     t_voc.alignment = WD_TABLE_ALIGNMENT.CENTER
     c_voc = t_voc.rows[0].cells[0]
     c_voc.width = Inches(7.0)
     set_cell_margins(c_voc, top=80, bottom=80, left=120, right=120)
-    set_cell_shading(c_voc, "F4F7FA") # Premium light-slate tint
+    set_cell_shading(c_voc, "F4F7FA")
 
     p_vhead = c_voc.paragraphs[0]
     p_vhead.paragraph_format.space_after = Pt(4)
-    r_vh = p_vhead.add_run("🔑 MANDATORY MARK-SCHEME TERMINOLOGY (EXAMINER CRITERIA)")
+    r_vh = p_vhead.add_run("🔑 EXAMINER MANDATORY MARK-SCHEME VOCABULARY")
     r_vh.bold = True
     r_vh.font.name = "Arial"
     r_vh.font.size = Pt(10)
@@ -286,73 +277,106 @@ def generate_astar_note_docx(note_data: dict, extracted_images: list, graph_type
         r_term = p_k.add_run(f"• {kw.get('term', '')}: ")
         r_term.bold = True
         r_term.font.name = "Calibri"
-        r_term.font.size = Pt(9.5)
-        format_chemical_text(p_k, kw.get('meaning', ''))
+        r_term.font.size = Pt(10)
+        p_k.add_run(kw.get('meaning', '')).font.name = "Calibri"
 
-    # 3. Core Scientific Concepts & Formulas
-    add_styled_heading(doc, "📘 IN-DEPTH CONCEPT MECHANISMS & PRINCIPLES", level=1)
-    
+    doc.add_paragraph().paragraph_format.space_before = Pt(6)
+
+    # 3. Core Concepts Breakdown
+    p_ch = doc.add_paragraph()
+    r_ch = p_ch.add_run("📘 DETAILED CONCEPT MECHANISMS & PRINCIPLES")
+    r_ch.bold = True
+    r_ch.font.name = "Arial"
+    r_ch.font.size = Pt(11)
+    r_ch.font.color.rgb = RGBColor(0, 51, 102)
+
     for sec_idx, section in enumerate(note_data.get("sections", [])):
         p_sub = doc.add_paragraph()
-        p_sub.paragraph_format.space_before = Pt(6)
+        p_sub.paragraph_format.space_before = Pt(8)
         p_sub.paragraph_format.space_after = Pt(2)
         r_sub = p_sub.add_run(f"§ {sec_idx + 1}. {section.get('subheading', '')}")
         r_sub.bold = True
         r_sub.font.name = "Arial"
         r_sub.font.size = Pt(10.5)
-        r_sub.font.color.rgb = RGBColor(20, 20, 20)
 
         for pt in section.get("points", []):
             p_pt = doc.add_paragraph()
             p_pt.paragraph_format.left_indent = Inches(0.2)
-            p_pt.paragraph_format.space_before = Pt(1)
-            p_pt.paragraph_format.space_after = Pt(2)
-            p_pt.add_run("• ").bold = True
-            format_chemical_text(p_pt, pt)
+            p_pt.add_run("- ").bold = True
+            format_body_text(p_pt, pt)
 
-        # Interleave uploaded diagrams into appropriate conceptual sections
-        if extracted_images and sec_idx < len(extracted_images):
-            img_item = extracted_images[sec_idx]
+        # Isolated Equation Callout Boxes
+        equations = section.get("equations", [])
+        if equations:
+            t_eq = doc.add_table(rows=1, cols=1)
+            t_eq.style = "Table Grid"
+            t_eq.alignment = WD_TABLE_ALIGNMENT.CENTER
+            c_eq = t_eq.rows[0].cells[0]
+            c_eq.width = Inches(6.6)
+            set_cell_margins(c_eq, top=60, bottom=60, left=120, right=120)
+            set_cell_shading(c_eq, "F9FAFB")
+
+            p_eq_head = c_eq.paragraphs[0]
+            r_eq_head = p_eq_head.add_run("Standard Chemical Equations & Ionic Notation:")
+            r_eq_head.bold = True
+            r_eq_head.font.size = Pt(9)
+            r_eq_head.font.color.rgb = RGBColor(70, 70, 70)
+
+            for eq_item in equations:
+                p_eq = c_eq.add_paragraph()
+                p_eq.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p_eq.paragraph_format.space_before = Pt(2)
+                p_eq.paragraph_format.space_after = Pt(2)
+                format_equation_line(p_eq, eq_item)
+
+        # Only insert diagrams that match the actual topic
+        if extracted_images and sec_idx == 0:
+            img_item = extracted_images[0]
             p_img = doc.add_paragraph()
             p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p_img.paragraph_format.space_before = Pt(6)
+            p_img.paragraph_format.space_before = Pt(8)
             p_img.paragraph_format.space_after = Pt(2)
-            doc.add_picture(img_item["bytes"], width=Inches(4.8))
+            doc.add_picture(img_item["bytes"], width=Inches(4.6))
             
-            p_imgcap = doc.add_paragraph()
-            p_imgcap.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p_imgcap.paragraph_format.space_after = Pt(6)
-            r_cap = p_imgcap.add_run(f"Figure {sec_idx + 1}: Technical Diagram Extracted from Primary Course Material (Page {img_item['page']})")
-            r_cap.font.name = "Arial"
+            p_cap = doc.add_paragraph()
+            p_cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_cap.paragraph_format.space_after = Pt(6)
+            r_cap = p_cap.add_run(f"Figure 1: Relevant Apparatus Schematic (Extracted from Course Text)")
             r_cap.font.size = Pt(8.5)
             r_cap.font.italic = True
-            r_cap.font.color.rgb = RGBColor(80, 80, 80)
+            r_cap.font.color.rgb = RGBColor(90, 90, 90)
 
-    # 4. Standard Plot Figure
+    # 4. Standard Graph Figure
     if graph_type != "none":
-        add_styled_heading(doc, "📈 QUANTITATIVE TREND & GRAPH PROFILE INTERPRETATION", level=1)
-        graph_buf = generate_sample_topic_graph(graph_type)
-        doc.add_picture(graph_buf, width=Inches(5.5))
-        p_cap = doc.add_paragraph()
-        p_cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r_cap = p_cap.add_run(f"Figure: Graphical Analysis & Reaction Trajectory for {note_data.get('topic','')}")
-        r_cap.font.name = "Arial"
-        r_cap.font.size = Pt(8.5)
-        r_cap.font.italic = True
+        doc.add_paragraph().paragraph_format.space_before = Pt(6)
+        p_gh = doc.add_paragraph()
+        r_gh = p_gh.add_run("📈 QUANTITATIVE TREND & GRAPH PROFILE INTERPRETATION")
+        r_gh.bold = True
+        r_gh.font.name = "Arial"
+        r_gh.font.size = Pt(11)
+        r_gh.font.color.rgb = RGBColor(0, 51, 102)
 
-    # 5. Examiner Misconceptions & Warning Box
-    doc.add_paragraph().paragraph_format.space_before = Pt(4)
+        graph_buf = generate_sample_topic_graph(graph_type)
+        doc.add_picture(graph_buf, width=Inches(5.4))
+        p_gcap = doc.add_paragraph()
+        p_gcap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r_gcap = p_gcap.add_run(f"Figure: Graphic Representation for {note_data.get('topic','')}")
+        r_gcap.font.size = Pt(8.5)
+        r_gcap.font.italic = True
+
+    # 5. Examiner Pitfalls Box
+    doc.add_paragraph().paragraph_format.space_before = Pt(6)
     t_warn = doc.add_table(rows=1, cols=1)
     t_warn.style = "Table Grid"
     t_warn.alignment = WD_TABLE_ALIGNMENT.CENTER
     c_warn = t_warn.rows[0].cells[0]
     c_warn.width = Inches(7.0)
     set_cell_margins(c_warn, top=80, bottom=80, left=120, right=120)
-    set_cell_shading(c_warn, "FDF3F2") # Muted Red/Warning tint
+    set_cell_shading(c_warn, "FDF3F2")
 
     p_whead = c_warn.paragraphs[0]
     p_whead.paragraph_format.space_after = Pt(4)
-    r_wh = p_whead.add_run("⚠️ EXAMINER REPORT: COMMON PITFALLS & WHERE STUDENTS LOSE MARKS")
+    r_wh = p_whead.add_run("⚠️ EXAMINER WARNING: COMMON MISCONCEPTIONS & LOST MARKS")
     r_wh.bold = True
     r_wh.font.name = "Arial"
     r_wh.font.size = Pt(10)
@@ -360,14 +384,14 @@ def generate_astar_note_docx(note_data: dict, extracted_images: list, graph_type
 
     for pit in note_data.get("common_pitfalls", []):
         p_pit = c_warn.add_paragraph()
-        p_pit.paragraph_format.space_before = Pt(1)
+        p_pit.paragraph_format.space_before = Pt(2)
         p_pit.paragraph_format.space_after = Pt(2)
-        p_pit.add_run("✖ ").bold = True
-        format_chemical_text(p_pit, pit)
+        p_pit.add_run("• ").bold = True
+        format_body_text(p_pit, pit)
 
-    # 6. Model Worked Calculation / Multi-Step Problem
+    # 6. Model Worked Example Box
     if note_data.get("worked_example"):
-        doc.add_paragraph().paragraph_format.space_before = Pt(4)
+        doc.add_paragraph().paragraph_format.space_before = Pt(6)
         t_work = doc.add_table(rows=1, cols=1)
         t_work.style = "Table Grid"
         t_work.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -378,23 +402,23 @@ def generate_astar_note_docx(note_data: dict, extracted_images: list, graph_type
 
         p_workhead = c_work.paragraphs[0]
         p_workhead.paragraph_format.space_after = Pt(4)
-        r_wkh = p_workhead.add_run("📝 A* STEP-BY-STEP WORKED MODEL SOLUTION")
+        r_wkh = p_workhead.add_run("📝 A* MODEL WORKED CALCULATION / SYNTHESIS")
         r_wkh.bold = True
         r_wkh.font.name = "Arial"
         r_wkh.font.size = Pt(10)
         r_wkh.font.color.rgb = RGBColor(0, 51, 102)
 
         p_wq = c_work.add_paragraph()
-        r_wq_title = p_wq.add_run("Question: ")
+        r_wq_title = p_wq.add_run("Problem: ")
         r_wq_title.bold = True
-        format_chemical_text(p_wq, note_data['worked_example'].get('question', ''))
+        p_wq.add_run(note_data['worked_example'].get('question', '')).font.name = "Calibri"
 
         for s_idx, stp in enumerate(note_data['worked_example'].get('solution_steps', [])):
             p_stp = c_work.add_paragraph()
             p_stp.paragraph_format.left_indent = Inches(0.2)
             r_st_title = p_stp.add_run(f"Step {s_idx + 1}: ")
             r_st_title.bold = True
-            format_chemical_text(p_stp, stp)
+            format_equation_line(p_stp, stp)
 
     doc_io = io.BytesIO()
     doc.save(doc_io)
@@ -429,11 +453,11 @@ if not api_key:
     st.stop()
 
 # =======================================================
-# MODE 1: A* COMPREHENSIVE LESSON NOTES (VISUAL + EQUATIONS)
+# MODE 1: A* COMPREHENSIVE LESSON NOTES
 # =======================================================
 if app_mode == "🌟 A* Comprehensive Lesson Notes":
     st.title("🌟 A* Publication-Grade Lesson Note Generator")
-    st.markdown("Generates Cambridge/WAEC examination notes formatted with **native chemical equations**, **subscripts**, **examiner warning boxes**, and **diagrams extracted straight from uploaded materials**.")
+    st.markdown("Generates clean Cambridge/WAEC notes formatted with **dedicated equation blocks**, **proper spacing**, and **topic-relevant diagram verification**.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -442,48 +466,49 @@ if app_mode == "🌟 A* Comprehensive Lesson Notes":
         an_class = st.text_input("Class Target", value="Year 11 / Cambridge IGCSE")
     with col2:
         graph_type = st.selectbox(
-            "Auto-Generate Kinetic/Thermal Graph:",
+            "Auto-Generate Graph Profile:",
             ["none", "Rate of Reaction (Volume vs Time)", "Heating/Cooling Curve (Phase Changes)", "Generic Trend Analysis"],
             index=0
         )
         textbook_file = st.file_uploader("Upload Textbook Chapter / Revision Note [.pdf]", type=["pdf"])
 
     an_extra_details = st.text_area(
-        "Specific Focus or Target Curriculum Codes:",
-        placeholder="e.g. Focus on preparation of insoluble salts by precipitation, state symbols, and ionic equations.",
+        "Target Curriculum Objectives / Codes:",
+        placeholder="e.g. CHE1.1.1 Identify Cations and Anions; focus on preparation of insoluble salts via precipitation.",
         height=80
     )
 
     if st.button("Generate Inspection-Grade A* Lesson Note", type="primary"):
-        with st.spinner("Extracting diagrams, equations, and compiling A* revision master..."):
-            extracted_text = ""
-            extracted_images = []
+        with st.spinner("Analyzing document, verifying diagram relevance, and formatting equations..."):
+            extracted_text, raw_images = extract_pdf_data_with_images(textbook_file)
             
-            if textbook_file is not None:
-                extracted_text, extracted_images = extract_pdf_data_with_images(textbook_file)
-                st.info(f"📸 Detected and preserved {len(extracted_images)} high-resolution technical diagram(s) from your uploaded document.")
+            # Use only substantial diagrams if found
+            verified_images = raw_images[:1] if raw_images else []
 
             note_prompt = f"""
-            You are a Senior Cambridge & WAEC Chief Examiner authoring a definitive, publication-quality A* revision chapter.
+            You are a Senior Cambridge & WAEC Chief Examiner authoring an unclustered, beautifully typeset A* revision chapter.
             SUBJECT: {an_subject}
             TOPIC: {an_topic}
             CLASS: {an_class}
-            FOCUS: {an_extra_details}
+            CURRICULUM OBJECTIVES / FOCUS: {an_extra_details}
 
             SOURCE MATERIAL TEXT:
-            {extracted_text[:12000] if extracted_text else "Use authoritative Cambridge IGCSE / WAEC examination syllabus standards."}
+            {extracted_text[:10000] if extracted_text else "Strictly align with Cambridge IGCSE / WAEC curriculum specifications."}
 
-            STRICT COMPILATION STANDARDS:
-            1. PROFESSIONAL CHEMICAL EQUATIONS & NOTATION:
-               - Write all chemical formulas accurately with proper notation (e.g., CaCO3, H2SO4, Cu(NO3)2).
-               - Always include state symbols: (s), (l), (g), (aq).
-               - Explicitly write full ionic equations where relevant (e.g. Ba2+(aq) + SO4 2-(aq) -> BaSO4(s)).
-               - Write reversible reactions using <=> and standard reactions with ->.
-            2. EXAMINER MANDATORY VOCABULARY: 4 to 6 technical terms that examiners strictly mark for (e.g., 'proton donor', 'lattice', 'spectator ions').
-            3. IN-DEPTH CORE BREAKDOWN: 3 to 4 substantial sections. Provide rigorous, sentence-length scientific explanations with equations. Do not provide superficial summaries.
-            4. COMMON PITFALLS: 3 to 4 specific misconceptions where B-grade students fail to secure A* marks.
-            5. WORKED MODEL SOLUTION: A multi-step calculation or synthesis preparation method showing full marks.
-            6. Return strictly a JSON object.
+            PEDAGOGICAL & FORMATTING STANDARDS:
+            1. UNCLUSTERED FORMATTING:
+               - Write in crisp, well-spaced bullet points. Do not write dense blocks of text.
+               - Separate each concept clearly into its own section.
+            2. PROFESSIONAL EQUATION FORMATTING:
+               - Place all balanced equations in the dedicated "equations" list.
+               - Write complete balanced molecular and ionic equations with state symbols (s), (l), (g), (aq).
+               - Correct formatting examples:
+                 * CaCO3(s) + 2HCl(aq) -> CaCl2(aq) + H2O(l) + CO2(g)
+                 * Ba2+(aq) + SO4 2-(aq) -> BaSO4(s)
+                 * NH3(g) + HCl(g) -> NH4Cl(s)
+            3. EXAMINER MANDATORY VOCABULARY: 4 to 6 exact technical keywords examiners look for on the mark scheme.
+            4. COMMON PITFALLS: 3 specific errors where students lose marks.
+            5. WORKED MODEL CALCULATION / PREPARATION: Clear problem with step-by-step numbered steps.
 
             JSON Schema:
             {{
@@ -491,15 +516,24 @@ if app_mode == "🌟 A* Comprehensive Lesson Notes":
                 "topic": "{an_topic}",
                 "class_name": "{an_class}",
                 "keywords": [{{"term": "string", "meaning": "string"}}],
-                "sections": [{{"subheading": "string", "points": ["string", "string", "string"]}}],
+                "sections": [
+                    {{
+                        "subheading": "string",
+                        "points": ["string", "string"],
+                        "equations": ["string"]
+                    }}
+                ],
                 "common_pitfalls": ["string", "string"],
-                "worked_example": {{"question": "string", "solution_steps": ["string", "string"]}}
+                "worked_example": {{
+                    "question": "string",
+                    "solution_steps": ["string", "string"]
+                }}
             }}
             """
             try:
                 client = genai.Client(api_key=api_key)
                 note_json = execute_generation_with_retry(client, note_prompt)
-                docx_file = generate_astar_note_docx(note_json, extracted_images, graph_type)
+                docx_file = generate_astar_note_docx(note_json, verified_images, graph_type)
 
                 st.success(f"A* Lesson Note for '{an_topic}' successfully compiled!")
                 st.download_button(
