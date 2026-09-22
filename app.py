@@ -76,39 +76,12 @@ def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pa
         st.warning(f"Note on {uploaded_file.name}: {e}")
     return ""
 
-def get_best_available_model(client) -> str:
-    """Dynamically checks Google API for available models on this key."""
-    try:
-        models = [m.name for m in client.models.list()]
-        clean_names = [m.replace("models/", "") for m in models]
-        
-        # Priority order
-        preferences = [
-            "gemini-2.5-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-latest",
-            "gemini-1.5-pro",
-            "gemini-2.5-pro"
-        ]
-        for pref in preferences:
-            if pref in clean_names:
-                return pref
-        # Fallback to the first flash model available
-        for name in clean_names:
-            if "flash" in name:
-                return name
-    except Exception:
-        pass
-    return "gemini-1.5-flash"
-
 def execute_generation_with_retry(client, prompt: str):
-    target_model = get_best_available_model(client)
-    models_to_try = [target_model, "gemini-1.5-flash", "gemini-1.5-pro"]
-    seen = set()
-    ordered_models = [m for m in models_to_try if not (m in seen or seen.add(m))]
-    
+    # Call generateContent with standard, stable identifiers
+    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
     last_error = None
-    for model_name in ordered_models:
+
+    for model_name in models_to_try:
         try:
             response = client.models.generate_content(
                 model=model_name,
@@ -663,7 +636,11 @@ with tab1:
                 "school_name", "staff_name", "subject", "unit_topic", "lesson_topic", "date", "period", "week", "lesson_number", "sex", "duration", "class_name", "no_in_class", "objectives", "resources", "references", "prior_knowledge", "direct_teaching", "guided_practice", "evaluation", "closure", "summary_notes", "assignment", "hod_comment"
                 """
                 try:
-                    client = genai.Client(api_key=api_key)
+                    # Enforce the stable v1 API client endpoint
+                    client = genai.Client(
+                        api_key=api_key,
+                        http_options=types.HttpOptions(api_version="v1")
+                    )
                     data = execute_generation_with_retry(client, prompt)
                     docx_bytes = generate_docx_bytes(data, term_selected)
                     clean_term = term_selected.replace(' ', '_')
@@ -754,7 +731,10 @@ with tab2:
             }}
             """
             try:
-                client = genai.Client(api_key=api_key)
+                client = genai.Client(
+                    api_key=api_key,
+                    http_options=types.HttpOptions(api_version="v1")
+                )
                 note_json = execute_generation_with_retry(client, note_prompt)
                 note_docx = generate_astar_note_docx(note_json)
                 st.session_state.notes_output = note_docx
