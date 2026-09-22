@@ -63,7 +63,8 @@ def extract_file_text(uploaded_file) -> str:
     return ""
 
 def execute_generation_with_retry(client, prompt: str):
-    models_to_try = ["gemini-3.6-flash", "gemini-2.0-flash"]
+    # Updated to active models: primary gemini-3.6-flash, fallback gemini-2.5-flash
+    models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash"]
     last_error = None
 
     for model_name in models_to_try:
