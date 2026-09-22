@@ -28,11 +28,6 @@ def set_cell_margins(cell, top=70, bottom=70, left=100, right=100):
     )
     tcPr.append(tcMar)
 
-def set_cell_shading(cell, color_hex: str):
-    tcPr = cell._tc.get_or_add_tcPr()
-    shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{color_hex}"/>')
-    tcPr.append(shd)
-
 def clean_json_response(raw_text: str):
     text = raw_text.strip()
     if text.startswith("```json"):
@@ -82,12 +77,14 @@ def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pa
     return ""
 
 def execute_generation_with_retry(client, prompt: str):
-    # Strictly target gemini-3.6-flash without broken fallbacks
+    # Standard official Gemini models supported across all API key tiers
+    models_to_try = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-flash"]
     last_error = None
-    for attempt in range(3):
+
+    for model_name in models_to_try:
         try:
             response = client.models.generate_content(
-                model="gemini-3.6-flash",
+                model=model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.1,
@@ -97,11 +94,8 @@ def execute_generation_with_retry(client, prompt: str):
             return clean_json_response(response.text)
         except Exception as err:
             last_error = err
-            err_msg = str(err)
-            if any(code in err_msg for code in ["503", "UNAVAILABLE", "429"]):
-                time.sleep(2 * (attempt + 1))
-                continue
-            raise err
+            time.sleep(1)
+            continue
     raise last_error
 
 # --- DOCX: Lesson Plans ---
@@ -339,7 +333,7 @@ def generate_astar_note_docx(note_data: dict) -> io.BytesIO:
     for c, w in zip(ribbon.rows[0].cells, col_w):
         c.width = w
         set_cell_margins(c, top=60, bottom=60, left=90, right=90)
-        set_cell_shading(c, "003366")
+        c._tc.get_or_add_tcPr().append(parse_xml(f'<w:shd {nsdecls("w")} w:fill="003366"/>'))
 
     labels = [
         f"SUBJECT: {note_data.get('subject', '').upper()}",
@@ -363,7 +357,7 @@ def generate_astar_note_docx(note_data: dict) -> io.BytesIO:
     c_voc = t_voc.rows[0].cells[0]
     c_voc.width = Inches(7.0)
     set_cell_margins(c_voc, top=80, bottom=80, left=120, right=120)
-    set_cell_shading(c_voc, "F4F7FA")
+    c_voc._tc.get_or_add_tcPr().append(parse_xml(f'<w:shd {nsdecls("w")} w:fill="F4F7FA"/>'))
 
     p_vhead = c_voc.paragraphs[0]
     p_vhead.paragraph_format.space_after = Pt(4)
@@ -412,7 +406,7 @@ def generate_astar_note_docx(note_data: dict) -> io.BytesIO:
             c_eq = t_eq.rows[0].cells[0]
             c_eq.width = Inches(6.8)
             set_cell_margins(c_eq, top=60, bottom=60, left=120, right=120)
-            set_cell_shading(c_eq, "F9FAFB")
+            c_eq._tc.get_or_add_tcPr().append(parse_xml(f'<w:shd {nsdecls("w")} w:fill="F9FAFB"/>'))
 
             p_eq_head = c_eq.paragraphs[0]
             r_eq_head = p_eq_head.add_run("Balanced Chemical & Ionic Equations:")
@@ -434,7 +428,7 @@ def generate_astar_note_docx(note_data: dict) -> io.BytesIO:
     c_warn = t_warn.rows[0].cells[0]
     c_warn.width = Inches(7.0)
     set_cell_margins(c_warn, top=80, bottom=80, left=120, right=120)
-    set_cell_shading(c_warn, "FDF3F2")
+    c_warn._tc.get_or_add_tcPr().append(parse_xml(f'<w:shd {nsdecls("w")} w:fill="FDF3F2"/>'))
 
     p_whead = c_warn.paragraphs[0]
     p_whead.paragraph_format.space_after = Pt(4)
@@ -461,7 +455,7 @@ def generate_astar_note_docx(note_data: dict) -> io.BytesIO:
         c_work = t_work.rows[0].cells[0]
         c_work.width = Inches(7.0)
         set_cell_margins(c_work, top=80, bottom=80, left=120, right=120)
-        set_cell_shading(c_work, "F9FBFD")
+        c_work._tc.get_or_add_tcPr().append(parse_xml(f'<w:shd {nsdecls("w")} w:fill="F9FBFD"/>'))
 
         p_workhead = c_work.paragraphs[0]
         p_workhead.paragraph_format.space_after = Pt(4)
@@ -494,7 +488,7 @@ saved_key = query_params.get("k", "")
 
 with st.sidebar:
     st.header("🔑 API Configuration")
-    user_key = st.text_input("Gemini API Key:", value=saved_key, type="password", help="Free key from aistudio.google.com")
+    user_key = st.text_input("Gemini API Key:", value=saved_key, type="password", help="Paste key directly from aistudio.google.com")
     if st.button("💾 Save Key to this Device"):
         if user_key.strip():
             st.query_params["k"] = user_key.strip()
@@ -503,7 +497,7 @@ with st.sidebar:
             st.query_params.clear()
             st.info("Key cleared.")
     st.markdown("---")
-    st.markdown("**Quota Reset (Free):**\n1. Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey)\n2. Click **Create API key in new project**\n3. Paste the key above and Save.")
+    st.markdown("**Quota Reset (Free):**\n1. Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey)\n2. Click **Create API key**\n3. Copy the key and click Save.")
 
 api_key = user_key.strip()
 if not api_key:
