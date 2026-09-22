@@ -76,28 +76,16 @@ def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pa
         st.warning(f"Note on {uploaded_file.name}: {e}")
     return ""
 
-def execute_generation_with_retry(client, prompt: str):
-    # Only target active 2.5 architecture supported on new AQ keys
-    models_to_try = ["gemini-2.5-flash", "gemini-2.5-pro"]
-    last_error = None
-
-    for model_name in models_to_try:
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.1,
-                        response_mime_type="application/json"
-                    )
-                )
-                return clean_json_response(response.text)
-            except Exception as err:
-                last_error = err
-                time.sleep(1.5)
-                continue
-    raise last_error
+def execute_generation(client, model_name: str, prompt: str):
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.1,
+            response_mime_type="application/json"
+        )
+    )
+    return clean_json_response(response.text)
 
 # --- DOCX: Lesson Plans ---
 def generate_docx_bytes(plans_data: list, term_label: str) -> io.BytesIO:
@@ -497,13 +485,51 @@ with st.sidebar:
         else:
             st.query_params.clear()
             st.info("Key cleared.")
-    st.markdown("---")
-    st.markdown("**Quota Reset (Free):**\n1. Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey)\n2. Click **Create API key**\n3. Copy the key and click Save.")
 
 api_key = user_key.strip()
 if not api_key:
     st.warning("👈 Enter your Gemini API key in the left sidebar to begin.")
     st.stop()
+
+# Initialize Google Client
+try:
+    client = genai.Client(api_key=api_key)
+except Exception as e:
+    st.error(f"Could not connect to Google API client: {e}")
+    st.stop()
+
+# Auto-fetch live models available on this specific key
+available_models = []
+try:
+    models_raw = list(client.models.list())
+    for m in models_raw:
+        cname = m.name.replace("models/", "")
+        # Only models that generate text/JSON
+        if any(token in cname for token in ["3.1", "3.6", "pro", "flash"]) and "embedding" not in cname:
+            available_models.append(cname)
+except Exception:
+    pass
+
+if not available_models:
+    available_models = ["gemini-3.1-pro-preview", "gemini-3.6-flash"]
+
+# Default to the exact model Google asked for
+default_index = 0
+for idx, m_cand in enumerate(available_models):
+    if "3.1-pro" in m_cand:
+        default_index = idx
+        break
+
+with st.sidebar:
+    st.markdown("---")
+    st.subheader("🤖 Active Model Selection")
+    chosen_model = st.selectbox(
+        "Model for this Session:",
+        available_models,
+        index=default_index,
+        help="Pulled directly from your key's permitted models."
+    )
+    st.caption(f"Currently targeted: `{chosen_model}`")
 
 if "plans_output" not in st.session_state:
     st.session_state.plans_output = None
@@ -577,7 +603,7 @@ with tab1:
         if not scheme_detail.strip() and not extracted_scheme and not extracted_curriculum:
             st.warning(f"Please provide objectives or upload your Scheme/Curriculum for {term_selected} {week_selected}.")
         else:
-            with st.spinner(f"Generating {lesson_count} inspection lesson plan(s)..."):
+            with st.spinner(f"Generating {lesson_count} lesson plans using `{chosen_model}`..."):
                 combined_docs = scheme_detail.strip()
                 if extracted_curriculum:
                     combined_docs += f"\n\n--- CURRICULUM FRAMEWORK ---\n{extracted_curriculum[:5000]}"
@@ -637,16 +663,14 @@ with tab1:
                 "school_name", "staff_name", "subject", "unit_topic", "lesson_topic", "date", "period", "week", "lesson_number", "sex", "duration", "class_name", "no_in_class", "objectives", "resources", "references", "prior_knowledge", "direct_teaching", "guided_practice", "evaluation", "closure", "summary_notes", "assignment", "hod_comment"
                 """
                 try:
-                    # Initialize default client without forcing restricted version overrides
-                    client = genai.Client(api_key=api_key)
-                    data = execute_generation_with_retry(client, prompt)
+                    data = execute_generation(client, chosen_model, prompt)
                     docx_bytes = generate_docx_bytes(data, term_selected)
                     clean_term = term_selected.replace(' ', '_')
                     clean_week = week_selected.replace(' ', '_')
                     st.session_state.plans_output = docx_bytes
                     st.session_state.plans_filename = f"NGA_{clean_term}_{clean_week}_{subject}.docx"
                 except Exception as e:
-                    st.error(f"Generation error: {e}")
+                    st.error(f"Generation error with model '{chosen_model}': {e}")
 
     if st.session_state.plans_output:
         st.success("Lesson plan document ready!")
@@ -684,7 +708,7 @@ with tab2:
         with st.spinner("Scanning chapter text..."):
             extracted_textbook = extract_targeted_file_text(textbook_file, keyword_hints=[an_topic, "Group I", "Alkali"])
         
-        with st.spinner(f"Compiling A* comprehensive revision note for '{an_topic}'..."):
+        with st.spinner(f"Compiling A* comprehensive revision note using `{chosen_model}`..."):
             note_prompt = f"""
             You are a Senior Principal Examiner preparing a publication-grade, A* student revision note.
             SUBJECT: {an_subject}
@@ -729,13 +753,12 @@ with tab2:
             }}
             """
             try:
-                client = genai.Client(api_key=api_key)
-                note_json = execute_generation_with_retry(client, note_prompt)
+                note_json = execute_generation(client, chosen_model, note_prompt)
                 note_docx = generate_astar_note_docx(note_json)
                 st.session_state.notes_output = note_docx
                 st.session_state.notes_filename = f"AStar_Note_{an_topic.replace(' ', '_')}.docx"
             except Exception as e:
-                st.error(f"Generation error: {e}")
+                st.error(f"Generation error with model '{chosen_model}': {e}")
 
     if st.session_state.notes_output:
         st.success("A* Lesson Note compiled successfully!")
