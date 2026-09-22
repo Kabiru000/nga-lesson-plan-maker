@@ -28,6 +28,11 @@ def set_cell_margins(cell, top=70, bottom=70, left=100, right=100):
     )
     tcPr.append(tcMar)
 
+def set_cell_shading(cell, color_hex: str):
+    tcPr = cell._tc.get_or_add_tcPr()
+    shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{color_hex}"/>')
+    tcPr.append(shd)
+
 def clean_json_response(raw_text: str):
     text = raw_text.strip()
     if text.startswith("```json"):
@@ -77,26 +82,26 @@ def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pa
     return ""
 
 def execute_generation_with_retry(client, prompt: str):
-    # Only active, supported models: gemini-3.6-flash and gemini-3.6-pro
-    models_to_try = ["gemini-3.6-flash", "gemini-3.6-pro"]
+    # Strictly target gemini-3.6-flash without broken fallbacks
     last_error = None
-
-    for model_name in models_to_try:
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.1,
-                        response_mime_type="application/json"
-                    )
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    response_mime_type="application/json"
                 )
-                return clean_json_response(response.text)
-            except Exception as err:
-                last_error = err
-                time.sleep(1.5)
+            )
+            return clean_json_response(response.text)
+        except Exception as err:
+            last_error = err
+            err_msg = str(err)
+            if any(code in err_msg for code in ["503", "UNAVAILABLE", "429"]):
+                time.sleep(2 * (attempt + 1))
                 continue
+            raise err
     raise last_error
 
 # --- DOCX: Lesson Plans ---
