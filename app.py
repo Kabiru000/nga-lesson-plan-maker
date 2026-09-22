@@ -28,11 +28,6 @@ def set_cell_margins(cell, top=70, bottom=70, left=100, right=100):
     )
     tcPr.append(tcMar)
 
-def set_cell_shading(cell, color_hex: str):
-    tcPr = cell._tc.get_or_add_tcPr()
-    shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{color_hex}"/>')
-    tcPr.append(shd)
-
 def clean_json_response(raw_text: str):
     text = raw_text.strip()
     if text.startswith("```json"):
@@ -43,7 +38,13 @@ def clean_json_response(raw_text: str):
         text = text[:-3]
     return json.loads(text.strip())
 
-def extract_file_text(uploaded_file) -> str:
+def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pages: int = 15) -> str:
+    """
+    High-speed PDF/DOCX extractor:
+    - Never scans 300+ pages of a 20MB file.
+    - If keyword hints exist, grabs only matching pages.
+    - Otherwise caps extraction to the first 15 relevant pages to finish in < 2 seconds.
+    """
     if uploaded_file is None:
         return ""
     fname = uploaded_file.name.lower()
@@ -52,37 +53,56 @@ def extract_file_text(uploaded_file) -> str:
             file_bytes = uploaded_file.read()
             uploaded_file.seek(0)
             doc = fitz.open(stream=file_bytes, filetype="pdf")
-            return "\n".join([page.get_text() for page in doc])
+            total = len(doc)
+            
+            matched_text = []
+            # If hints provided (like 'Week 5' or topic), find matching pages fast
+            if keyword_hints and len(keyword_hints) > 0:
+                clean_hints = [h.lower() for h in keyword_hints if len(h) > 2]
+                for page_idx in range(total):
+                    page_text = doc[page_idx].get_text()
+                    low = page_text.lower()
+                    if any(ch in low for ch in clean_hints):
+                        matched_text.append(page_text)
+                        if len(matched_text) >= 5: # 5 targeted pages is plenty
+                            break
+            
+            # Fallback if no keyword match found or hints empty: scan only first few pages
+            if not matched_text:
+                for page_idx in range(min(total, max_pages)):
+                    matched_text.append(doc[page_idx].get_text())
+
+            return "\n".join(matched_text)
+            
         elif fname.endswith(".docx"):
             d = Document(uploaded_file)
-            return "\n".join([p.text for p in d.paragraphs if p.text])
+            paras = [p.text for p in d.paragraphs if p.text.strip()]
+            return "\n".join(paras[:150]) # First 150 paragraphs is more than enough
         elif fname.endswith(".txt"):
-            return uploaded_file.read().decode("utf-8", errors="ignore")
+            return uploaded_file.read().decode("utf-8", errors="ignore")[:10000]
     except Exception as e:
-        st.warning(f"Could not read {uploaded_file.name}: {e}")
+        st.warning(f"Note on {uploaded_file.name}: {e}")
     return ""
 
 def execute_generation_with_retry(client, prompt: str):
-    # Updated to active models: primary gemini-3.6-flash, fallback gemini-2.5-flash
     models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash"]
     last_error = None
 
     for model_name in models_to_try:
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.2,
-                        response_mime_type="application/json"
-                    )
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1, # Lower temperature = faster, deterministic output
+                    response_mime_type="application/json"
                 )
-                return clean_json_response(response.text)
-            except Exception as err:
-                last_error = err
-                time.sleep(2)
-                continue
+            )
+            return clean_json_response(response.text)
+        except Exception as err:
+            last_error = err
+            time.sleep(1)
+            continue
     raise last_error
 
 # --- DOCX: Lesson Plans ---
@@ -528,7 +548,7 @@ with tab1:
 
     c3, c4 = st.columns(2)
     with c3:
-        unit_topic = st.text_input("Unit Topic for this Week", value="Acids, Bases and Salts", key="lp_utop")
+        unit_topic = st.text_input("Unit Topic for this Week", value="Group I Alkali Metals", key="lp_utop")
     with c4:
         textbooks = st.text_input("Reference Textbooks", value="New School Chemistry & Cambridge IGCSE Chemistry", key="lp_tb")
 
@@ -539,26 +559,26 @@ with tab1:
         with topic_cols[i]:
             contact_topics[f"Lesson {i+1}"] = st.text_input(f"Lesson {i+1} Topic:", placeholder=f"Sub-topic {i+1}", key=f"lp_top_{i+1}")
 
-    st.subheader("📎 Curriculum, Scheme & Note Uploads (Optional)")
-    u_col1, u_col2, u_col3 = st.columns(3)
+    st.subheader("📎 Curriculum & Scheme Uploads (Optional)")
+    u_col1, u_col2 = st.columns(2)
     with u_col1:
         curriculum_file = st.file_uploader("1. Curriculum Framework [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"], key="lp_cur")
     with u_col2:
         scheme_file = st.file_uploader("2. Annual Scheme of Work [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"], key="lp_sch")
-    with u_col3:
-        notes_file = st.file_uploader("3. Lesson Notes / Textbook [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"], key="lp_not")
 
     scheme_detail = st.text_area(
-        f"Curriculum Objectives & Codes for {term_selected}, {week_selected} (Paste here if not uploading files):",
+        f"Curriculum Objectives & Codes for {term_selected}, {week_selected} (Paste here or upload above):",
         height=90,
-        placeholder="CHE1.1.1 Identify Cations and Anions in a solution.\nCHE1.1.2 Test for aqueous cations using sodium hydroxide.",
+        placeholder="CHE8.2.1 Describe the Group I alkali metals, lithium, sodium and potassium...",
         key="lp_manual_objs"
     )
 
     if st.button("Generate Inspection Plans", type="primary", key="btn_gen_plans"):
-        extracted_curriculum = extract_file_text(curriculum_file)
-        extracted_scheme = extract_file_text(scheme_file)
-        extracted_notes = extract_file_text(notes_file)
+        hints = [term_selected, week_selected, unit_topic]
+        
+        with st.spinner("Extracting syllabus targets..."):
+            extracted_curriculum = extract_targeted_file_text(curriculum_file, keyword_hints=hints)
+            extracted_scheme = extract_targeted_file_text(scheme_file, keyword_hints=hints)
 
         if not scheme_detail.strip() and not extracted_scheme and not extracted_curriculum:
             st.warning(f"Please provide objectives or upload your Scheme/Curriculum for {term_selected} {week_selected}.")
@@ -566,11 +586,9 @@ with tab1:
             with st.spinner(f"Generating {lesson_count} inspection lesson plan(s)..."):
                 combined_docs = scheme_detail.strip()
                 if extracted_curriculum:
-                    combined_docs += f"\n\n--- CURRICULUM FRAMEWORK ---\n{extracted_curriculum[:8000]}"
+                    combined_docs += f"\n\n--- CURRICULUM FRAMEWORK ---\n{extracted_curriculum[:5000]}"
                 if extracted_scheme:
-                    combined_docs += f"\n\n--- SCHEME OF WORK ({term_selected.upper()} {week_selected.upper()}) ---\n{extracted_scheme[:12000]}"
-                if extracted_notes:
-                    combined_docs += f"\n\n--- REFERENCE NOTES ---\n{extracted_notes[:5000]}"
+                    combined_docs += f"\n\n--- SCHEME OF WORK ---\n{extracted_scheme[:7000]}"
 
                 topic_instructions = []
                 for k, v in contact_topics.items():
@@ -604,7 +622,7 @@ with tab1:
                 EXACT LESSON TOPIC ASSIGNMENTS:
                 {topic_summary}
 
-                CURRICULUM SPECIFICATIONS, SCHEME OF WORK & REFERENCE MATERIAL:
+                CURRICULUM SPECIFICATIONS & SCHEME OF WORK:
                 {combined_docs}
 
                 CRITICAL PEDAGOGICAL & FORMATTING REQUIREMENTS:
@@ -650,25 +668,27 @@ with tab1:
 # =======================================================
 with tab2:
     st.subheader("🌟 Generate A* Cambridge/WAEC-Grade Lesson Notes")
-    st.caption("Upload textbook extracts or notes to generate examiner-targeted study notes with equations, keywords, and worked examples.")
+    st.caption("Upload textbook extracts or chapter notes to generate examiner-targeted study notes with equations, keywords, and worked examples.")
 
     an_c1, an_c2 = st.columns(2)
     with an_c1:
         an_subject = st.text_input("Subject", value="CHEMISTRY", key="note_subj")
-        an_topic = st.text_input("Specific Topic", value="Acids, Bases and Salts", key="note_topic")
+        an_topic = st.text_input("Specific Topic", value="Group I Alkali Metals", key="note_topic")
         an_class = st.text_input("Class Target", value="Year 11 / Cambridge IGCSE", key="note_class")
     with an_c2:
         textbook_file = st.file_uploader("Upload Textbook / Chapter PDF [.pdf, .docx, .txt]", type=["pdf", "docx", "txt"], key="note_file")
 
     an_extra_details = st.text_area(
         "Target Curriculum Objectives / Codes (Optional):",
-        placeholder="e.g. Focus on preparation of insoluble salts via precipitation, state symbols, and ionic equations.",
+        placeholder="e.g. CHE8.2.1 Describe the Group I alkali metals; physical properties, reaction with water, flame tests.",
         height=80,
         key="note_extra"
     )
 
     if st.button("Generate A* Comprehensive Lesson Note", type="primary", key="btn_gen_notes"):
-        extracted_textbook = extract_file_text(textbook_file)
+        with st.spinner("Scanning chapter text..."):
+            extracted_textbook = extract_targeted_file_text(textbook_file, keyword_hints=[an_topic, "Group I", "Alkali"])
+        
         with st.spinner(f"Compiling A* comprehensive revision note for '{an_topic}'..."):
             note_prompt = f"""
             You are a Senior Principal Examiner preparing a publication-grade, A* student revision note.
@@ -679,7 +699,7 @@ with tab2:
 
             PRIMARY SOURCE EXTRACT:
             \"\"\"
-            {extracted_textbook[:10000] if extracted_textbook else "Strictly align with Cambridge IGCSE / WAEC curriculum specifications."}
+            {extracted_textbook[:9000] if extracted_textbook else "Strictly align with Cambridge IGCSE / WAEC curriculum specifications."}
             \"\"\"
 
             CRITICAL FIDELITY REQUIREMENTS:
@@ -687,11 +707,11 @@ with tab2:
             2. PROFESSIONAL EQUATION FORMATTING:
                - Place all balanced equations in the dedicated "equations" array under each section.
                - Write complete equations with correct state symbols (s, l, g, aq).
-               - Example: "CaCO3(s) + 2HCl(aq) -> CaCl2(aq) + H2O(l) + CO2(g)"
+               - Example: "2Na(s) + 2H2O(l) -> 2NaOH(aq) + H2(g)"
             3. CLEAN STRUCTURE: In the "points" array, write concise, informative sentences. Do not use raw markdown asterisks (**).
             4. EXAMINER MANDATORY VOCABULARY: 4 to 6 exact technical keywords defined in the text.
             5. COMMON PITFALLS: 3 specific errors where students frequently lose marks.
-            6. WORKED EXAMPLE: A multi-step calculation or preparation problem with numbered steps.
+            6. WORKED EXAMPLE: A multi-step calculation or reaction deduction problem with numbered steps.
 
             JSON Schema:
             {{
