@@ -39,12 +39,6 @@ def clean_json_response(raw_text: str):
     return json.loads(text.strip())
 
 def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pages: int = 15) -> str:
-    """
-    High-speed PDF/DOCX extractor:
-    - Never scans 300+ pages of a 20MB file.
-    - If keyword hints exist, grabs only matching pages.
-    - Otherwise caps extraction to the first 15 relevant pages to finish in < 2 seconds.
-    """
     if uploaded_file is None:
         return ""
     fname = uploaded_file.name.lower()
@@ -56,7 +50,6 @@ def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pa
             total = len(doc)
             
             matched_text = []
-            # If hints provided (like 'Week 5' or topic), find matching pages fast
             if keyword_hints and len(keyword_hints) > 0:
                 clean_hints = [h.lower() for h in keyword_hints if len(h) > 2]
                 for page_idx in range(total):
@@ -64,10 +57,9 @@ def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pa
                     low = page_text.lower()
                     if any(ch in low for ch in clean_hints):
                         matched_text.append(page_text)
-                        if len(matched_text) >= 5: # 5 targeted pages is plenty
+                        if len(matched_text) >= 5:
                             break
             
-            # Fallback if no keyword match found or hints empty: scan only first few pages
             if not matched_text:
                 for page_idx in range(min(total, max_pages)):
                     matched_text.append(doc[page_idx].get_text())
@@ -77,7 +69,7 @@ def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pa
         elif fname.endswith(".docx"):
             d = Document(uploaded_file)
             paras = [p.text for p in d.paragraphs if p.text.strip()]
-            return "\n".join(paras[:150]) # First 150 paragraphs is more than enough
+            return "\n".join(paras[:150])
         elif fname.endswith(".txt"):
             return uploaded_file.read().decode("utf-8", errors="ignore")[:10000]
     except Exception as e:
@@ -85,24 +77,26 @@ def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pa
     return ""
 
 def execute_generation_with_retry(client, prompt: str):
-    models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash"]
+    # Only active, supported models: gemini-3.6-flash and gemini-3.6-pro
+    models_to_try = ["gemini-3.6-flash", "gemini-3.6-pro"]
     last_error = None
 
     for model_name in models_to_try:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.1, # Lower temperature = faster, deterministic output
-                    response_mime_type="application/json"
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        response_mime_type="application/json"
+                    )
                 )
-            )
-            return clean_json_response(response.text)
-        except Exception as err:
-            last_error = err
-            time.sleep(1)
-            continue
+                return clean_json_response(response.text)
+            except Exception as err:
+                last_error = err
+                time.sleep(1.5)
+                continue
     raise last_error
 
 # --- DOCX: Lesson Plans ---
