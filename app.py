@@ -77,25 +77,26 @@ def extract_targeted_file_text(uploaded_file, keyword_hints: list = None, max_pa
     return ""
 
 def execute_generation_with_retry(client, prompt: str):
-    # Call generateContent with standard, stable identifiers
-    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    # Only target active 2.5 architecture supported on new AQ keys
+    models_to_try = ["gemini-2.5-flash", "gemini-2.5-pro"]
     last_error = None
 
     for model_name in models_to_try:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    response_mime_type="application/json"
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        response_mime_type="application/json"
+                    )
                 )
-            )
-            return clean_json_response(response.text)
-        except Exception as err:
-            last_error = err
-            time.sleep(1)
-            continue
+                return clean_json_response(response.text)
+            except Exception as err:
+                last_error = err
+                time.sleep(1.5)
+                continue
     raise last_error
 
 # --- DOCX: Lesson Plans ---
@@ -636,11 +637,8 @@ with tab1:
                 "school_name", "staff_name", "subject", "unit_topic", "lesson_topic", "date", "period", "week", "lesson_number", "sex", "duration", "class_name", "no_in_class", "objectives", "resources", "references", "prior_knowledge", "direct_teaching", "guided_practice", "evaluation", "closure", "summary_notes", "assignment", "hod_comment"
                 """
                 try:
-                    # Enforce the stable v1 API client endpoint
-                    client = genai.Client(
-                        api_key=api_key,
-                        http_options=types.HttpOptions(api_version="v1")
-                    )
+                    # Initialize default client without forcing restricted version overrides
+                    client = genai.Client(api_key=api_key)
                     data = execute_generation_with_retry(client, prompt)
                     docx_bytes = generate_docx_bytes(data, term_selected)
                     clean_term = term_selected.replace(' ', '_')
@@ -731,10 +729,7 @@ with tab2:
             }}
             """
             try:
-                client = genai.Client(
-                    api_key=api_key,
-                    http_options=types.HttpOptions(api_version="v1")
-                )
+                client = genai.Client(api_key=api_key)
                 note_json = execute_generation_with_retry(client, note_prompt)
                 note_docx = generate_astar_note_docx(note_json)
                 st.session_state.notes_output = note_docx
